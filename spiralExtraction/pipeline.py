@@ -2,18 +2,16 @@ import numpy as np
 from sklearn.cluster import DBSCAN
 from scipy.interpolate import UnivariateSpline
 import sys
-from . import log
 import metric
 import clustering
 import cleaning
 import ordering
 
 
-def fitSmoothedSpline(points):
-    t = np.linspace(0, 1, points.shape[0])
-    Sx = UnivariateSpline(t, points[:, 0], k=5)#, s=0.25)
-    Sy = UnivariateSpline(t, points[:, 1], k=5)#, s=0.25)
-    return (Sx, Sy)
+def _log(s, flag=True, stepCount=-1, nSteps=8):
+    if flag:
+        preamble = '[{} / {}]'.format(stepCount, nSteps) if stepCount >= 0
+        print('{} {}'.format(s, stepCount, maxSteps))
 
 
 def usage():
@@ -32,31 +30,32 @@ def fit(
     if not isinstance(drawnArms, np.array):
         usage()
         sys.exit(0)
-    log('Calculating distance matrix (this can be slow)', verbose)
+    _log('Calculating distance matrix (this can be slow)', 1, verbose)
     functions = []
     clfs = []
     distances = metric.calculateDistanceMatrix(drawnArms)
-    log('Clustering arms', verbose)
+    _log('Clustering arms', 2, verbose)
     db = clustering.clusterArms(distances)
 
     for label in np.unique(db.labels_):
         if label < 0:
             continue
-        log('Working on arm label {}'.format(label), verbose)
+        _log('Working on arm label {}'.format(label), 3, verbose)
         pointCloud = np.array([
             point for arm in drawnArms[db.labels_ == label]
             for point in arm
         ])
-        log(
-            '\t[1 / 4] Cleaning points ({} total)'.format(pointCloud.shape[0]),
+        _log(
+            'Cleaning points ({} total)'.format(pointCloud.shape[0]),
+            4,
             verbose
         )
         clf, mask = cleaning.cleanPoints(pointCloud)
         clfs.append(clf)
         cleanedCloud = pointCloud[mask]
-        log('\t[2 / 4] Identifiying most representitive arm', verbose)
+        _log('\t[2 / 4] Identifiying most representitive arm', verbose)
         armyArm = ordering.findArmyArm(drawnArms[db.labels_ == label], clf)
-        log('\t[3 / 4] Sorting points', verbose)
+        _log('\t[3 / 4] Sorting points', verbose)
         deviationCloud = np.transpose(
             ordering.getDistAlongPolyline(cleanedCloud, armyArm)
         )
