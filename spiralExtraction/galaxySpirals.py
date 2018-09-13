@@ -2,11 +2,12 @@ import numpy as np
 from sklearn.cluster import DBSCAN
 from scipy.interpolate import UnivariateSpline
 import sys
+from . import rThetaFromXY
 from . import deprojectArm
-import metric
-import clustering
-import cleaning
-import ordering
+from . import metric
+from . import clustering
+from . import cleaning
+from . import ordering
 
 
 class GZBArm(object):
@@ -58,18 +59,17 @@ class GZBArm(object):
     def deproject(self, phi, ba, imageSize):
         deprojectedArms = np.array([
             deprojectArm(phi, ba, arm / imageSize - 0.5)
-            for arm in drawnArms
+            for arm in self.drawnArms
         ])
         return GZBArm(deprojectedArms)
 
     def toRadial(self, points=None, mux=0, muy=0):
         if points is None:
-            pointsToConvert = self.pointCloud
+            pointsToConvert = self.pointCloud[self.pointOrder]
         else:
             pointsToConvert = points
-        return spiralExtraction.rThetaFromXY(
-            normalisedPoints[:, 0],
-            normalisedPoints[:, 1],
+        return rThetaFromXY(
+            *pointsToConvert.T,
             mux=0, muy=0
         )
 
@@ -86,9 +86,11 @@ class GalaxySpirals(object):
         ])
 
     def clusterLines(self, redoDistances=False):
-        if not self.distances or redoDistances:
+        try:
+            self.db = clustering.clusterArms(self.distances)
+        except AttributeError:
             self.distances = metric.calculateDistanceMatrix(self.drawnArms)
-        self.db = clustering.clusterArms(self.distances)
+            self.db = clustering.clusterArms(self.distances)
         self.arms = [
             GZBArm(self.drawnArms[self.db.labels_ == i])
             for i in range(np.max(self.db.labels_) + 1)
@@ -102,12 +104,27 @@ class GalaxySpirals(object):
             arm.orderAlongArm()
 
 
-if __name__ == "__main__":
+def test():
     a = np.stack(
         (
-            np.tile(np.arange(100), 5),
-            np.tile(np.random.random(size=100), 5)
+            np.tile(np.arange(100), 5).reshape(5, 100),
+            np.array([
+                np.random.random(size=100) for i in range(5)
+            ]).reshape(5, 100)
         ),
-        axis=1
+        axis=2
     )
-    print(a)
+    b = np.stack(
+        (
+            np.tile(np.arange(100), 5).reshape(5, 100),
+            np.array([
+                np.random.random(size=100) + 100 for i in range(5)
+            ]).reshape(5, 100)
+        ),
+        axis=2
+    )
+    arms = np.concatenate((a, b))
+    S = GalaxySpirals(arms, imageSize=100)
+    print('Clustering:')
+    db = S.clusterLines()
+    print('Passed test?', np.all(db.labels_ == ([0] * 5 + [1] * 5)))
