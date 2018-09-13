@@ -1,8 +1,7 @@
 import numpy as np
-from sklearn.cluster import DBSCAN
 from scipy.interpolate import UnivariateSpline
 import sys
-from . import rThetaFromXY
+from . import rThetaFromXY, fitSmoothedSpline
 from . import deprojectArm
 from . import metric
 from . import clustering
@@ -38,23 +37,37 @@ class GZBArm(object):
             self.chooseRepresentativeArm()
             chosenArm = arm if arm else self.armyArm
 
-        deviationCloud = np.transpose(
+        self.deviationCloud = np.transpose(
             ordering.getDistAlongPolyline(self.cleanedCloud, chosenArm)
         )
 
-        deviationEnvelope = np.abs(deviationCloud[:, 1]) < 30
+        deviationEnvelope = np.abs(self.deviationCloud[:, 1]) < 30
         startEndMask = np.logical_and(
-            deviationCloud[:, 0] > 0,
-            deviationCloud[:, 0] < chosenArm.shape[0]
+            self.deviationCloud[:, 0] > 0,
+            self.deviationCloud[:, 0] < chosenArm.shape[0]
         )
 
-        totalMask = np.logical_and(deviationEnvelope, startEndMask)
+        self.totalMask = np.logical_and(deviationEnvelope, startEndMask)
 
-        self.pointOrder = np.argsort(deviationCloud[totalMask, 0])
+        self.pointOrder = np.argsort(self.deviationCloud[self.totalMask, 0])
+        self.orderedPoints = self.cleanedCloud[self.totalMask][self.pointOrder]
 
         if deviation:
-            return self.pointOrder, deviationCloud
+            return self.pointOrder, self.deviationCloud
         return self.pointOrder
+
+    def fitSpline(self):
+        t = self.deviationCloud[self.totalMask, 0][self.pointOrder].copy()
+        t /= np.max(t)
+        mask = t[1:] - t[:-1] <= 0
+        while np.any(mask):
+            mask = t[1:] - t[:-1] <= 0
+            t[1:][mask] += 0.0001
+
+        t = np.linspace(0, 1, self.orderedPoints.shape[0])
+        Sx = UnivariateSpline(t, self.orderedPoints[:, 0], k=5)
+        Sy = UnivariateSpline(t, self.orderedPoints[:, 1], k=5)
+        return (Sx, Sy)
 
     def deproject(self, phi, ba, imageSize):
         deprojectedArms = np.array([
@@ -85,16 +98,24 @@ class GalaxySpirals(object):
             for arm in drawnArms
         ])
 
-    def clusterLines(self, redoDistances=False):
-        try:
-            self.db = clustering.clusterArms(self.distances)
-        except AttributeError:
-            self.distances = metric.calculateDistanceMatrix(self.drawnArms)
-            self.db = clustering.clusterArms(self.distances)
-        self.arms = [
-            GZBArm(self.drawnArms[self.db.labels_ == i])
-            for i in range(np.max(self.db.labels_) + 1)
-        ]
+    def calculateDistances(self):
+        self.distances = metric.calculateDistanceMatrix(self.drawnArms)
+        return self.distances
+
+    def clusterLines(self, distances=None, redoDistances=False):
+        if distances is not None:
+            self.distances = distances
+            self.db = clustering.clusterArms(distances)
+        else:
+            try:
+                self.db = clustering.clusterArms(self.distances)
+            except AttributeError:
+                self.distances = metric.calculateDistanceMatrix(self.drawnArms)
+                self.db = clustering.clusterArms(self.distances)
+            self.arms = [
+                GZBArm(self.drawnArms[self.db.labels_ == i])
+                for i in range(np.max(self.db.labels_) + 1)
+            ]
         return self.db
 
     def fitArms(self):
