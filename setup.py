@@ -1,10 +1,10 @@
 from setuptools import setup
 
-setup(name='gz-builder-spiral-extraction',
+setup(name='gzbuilderspirals',
       version='0.1',
       description='Spiral extraction package for Galaxy Zoo: Builder',
       author='Tim Lingard',
       author_email='tklingard@gmail.com',
       license='MIT',
-      packages=['spiralExtraction'],
+      packages=['gzbuilderspirals'],
       zip_safe=False)
