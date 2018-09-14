@@ -1,6 +1,5 @@
 import numpy as np
-from scipy.interpolate import UnivariateSpline
-from scipy.interpolate import interp1d
+from scipy.interpolate import splprep, splev, UnivariateSpline, interp1d
 from types import SimpleNamespace
 from . import rThetaFromXY, xyFromRTheta, deprojectArm
 from . import metric
@@ -17,6 +16,9 @@ class GZBArm(object):
             for point in arm
         ])
         self.imageSize = imageSize
+
+    def normalise(self, a):
+        return (a / self.imageSize) - 0.5
 
     def deNorm(self, a):
         return (a + 0.5) * self.imageSize
@@ -59,26 +61,34 @@ class GZBArm(object):
 
     def genTFromOrdering(self, ordering):
         t = ordering.deviationCloud[ordering.pointOrder, 0].copy()
-        t /= np.max(t)
         # ensure it's strictly monotonically increasing
         mask = t[1:] - t[:-1] <= 0
         while np.any(mask):
             mask = t[1:] - t[:-1] <= 0
             t[1:][mask] += 0.0001
+
+        # normalise from 0 to 1
+        t -= np.min(t)
         t /= np.max(t)
         return t
 
-    def fitXYSpline(self, ordering, t):
-        normalisedPoints = (ordering.orderedPoints / self.imageSize - 0.5)
-        Sx = UnivariateSpline(t, normalisedPoints[:, 0], k=5, s=0.25)
-        Sy = UnivariateSpline(t, normalisedPoints[:, 1], k=5, s=0.25)
-        return (Sx, Sy)
+    def fitSpline(self, ordering):
+        normalisedPoints = self.normalise(ordering.orderedPoints)
+        # mask to ensure no points are in the same place
+        pm = np.ones(normalisedPoints.shape[0], dtype=bool)
+        pm[1:] = np.linalg.norm(
+            normalisedPoints[1:] - normalisedPoints[:-1],
+            axis=1
+        ) != 0
+        # perform the interpolation
+        tck, u = splprep(normalisedPoints[pm].T, s=1, k=5)
+        return np.array(splev(u, tck)).T
 
     def deproject(self, phi, ba):
-        dp = lambda arr: (deprojectArm(
+        dp = lambda arr: self.deNorm(deprojectArm(
             phi, ba,
-            arr / self.imageSize - 0.5
-        ) + 0.5) * self.imageSize
+            self.normalise(arr)
+        ))
 
         deprojected = GZBArm(np.array([
             dp(arm)
@@ -109,89 +119,73 @@ class GalaxySpirals(object):
     def clusterLines(self, distances=None, redoDistances=False):
         if distances is not None:
             self.distances = distances
-            self.db = clustering.clusterArms(distances)
-        else:
-            try:
-                self.db = clustering.clusterArms(self.distances)
-            except AttributeError:
-                self.distances = metric.calculateDistanceMatrix(self.drawnArms)
-                self.db = clustering.clusterArms(self.distances)
-            self.arms = [
-                GZBArm(self.drawnArms[self.db.labels_ == i], self.imageSize)
-                for i in range(np.max(self.db.labels_) + 1)
-            ]
+        try:
+            self.db = clustering.clusterArms(self.distances)
+        except AttributeError:
+            self.distances = metric.calculateDistanceMatrix(self.drawnArms)
+            self.db = clustering.clusterArms(self.distances)
+        self.arms = [
+            GZBArm(self.drawnArms[self.db.labels_ == i], self.imageSize)
+            for i in range(np.max(self.db.labels_) + 1)
+        ]
         return self.db
 
-    def fitArms(self, t=np.linspace(0, 1, 1000)):
+    def fitXYSplines(self):
         result = SimpleNamespace(
-            xySplines=[],
-            deprojectedArms=[],
-            radialFit=[],
+            representativeArms=[],
+            orderings=[],
+            fits=[],
         )
         for arm in self.arms:
             arm.clean()
             representativeArm = arm.chooseRepresentativeArm()
             ordering = arm.orderAlongArm(representativeArm)
 
-            chosenT = arm.genTFromOrdering(ordering)
+            fit = arm.fitSpline(ordering)
 
-            Sx, Sy = arm.fitXYSpline(ordering, chosenT)
-            imageSpline = np.stack((Sx(t), Sy(t)), axis=1)
+            result.representativeArms.append(representativeArm)
+            result.orderings.append(ordering)
+            result.fits.append(fit)
+        return result
 
-            deprojectedSpline = deprojectArm(
+    def fitRadialSplines(self, xyResult):
+        result = SimpleNamespace(
+            deprojectedArms=[],
+            radialFit=[],
+            orderings=[],
+        )
+        for i, arm in enumerate(self.arms):
+            xyFit = xyResult.fits[i]
+            t = np.linspace(0, 1, xyFit.shape[0])
+
+            deprojectedXYFit = deprojectArm(
                 self.phi, self.ba,
-                imageSpline
+                xyFit
             )
 
             deprojectedArm = arm.deproject(self.phi, self.ba)
-            ordering2 = deprojectedArm.orderAlongArm(
-                arm.deNorm(deprojectedSpline)
+            ordering = deprojectedArm.orderAlongArm(
+                arm.deNorm(deprojectedXYFit)
             )
 
-            deprojectedT = deprojectedArm.genTFromOrdering(ordering2)
+            deprojectedT = deprojectedArm.genTFromOrdering(ordering)
             orderedDeprojectedCloud = (
-                deprojectedArm.cleanedCloud[ordering2.pointOrder]
+                deprojectedArm.cleanedCloud[ordering.pointOrder]
             )
             r, theta = rThetaFromXY(
-                *orderedDeprojectedCloud.T / 512 - 0.5,
+                *arm.normalise(orderedDeprojectedCloud).T,
                 mux=0, muy=0
             )
             aaR, aaTh = rThetaFromXY(
-                *(deprojectedSpline.T)
+                *(deprojectedXYFit.T)
             )
 
             tFunc = interp1d(t, aaTh)
 
-            Sr = UnivariateSpline(deprojectedT, r, k=5)
+            Sr = UnivariateSpline(deprojectedT, r, k=5, s=0.5)
             xr, yr = xyFromRTheta(Sr(t), tFunc(t), mux=0, muy=0)
 
-            result.xySplines.append([Sx, Sy])
             result.deprojectedArms.append(deprojectedArm)
+            result.orderings.append(ordering)
             result.radialFit.append(np.stack((xr, yr), axis=1))
         return result
-
-
-def test():
-    a = np.stack(
-        (
-            np.tile(np.arange(100), 5).reshape(5, 100),
-            np.array([
-                np.random.random(size=100) for i in range(5)
-            ]).reshape(5, 100)
-        ),
-        axis=2
-    )
-    b = np.stack(
-        (
-            np.tile(np.arange(100), 5).reshape(5, 100),
-            np.array([
-                np.random.random(size=100) + 100 for i in range(5)
-            ]).reshape(5, 100)
-        ),
-        axis=2
-    )
-    arms = np.concatenate((a, b))
-    S = GalaxySpirals(arms, imageSize=100)
-    print('Clustering:')
-    db = S.clusterLines()
-    print('Passed test?', np.all(db.labels_ == ([0] * 5 + [1] * 5)))
