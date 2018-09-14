@@ -1,8 +1,8 @@
 import numpy as np
 from scipy.interpolate import UnivariateSpline
-import sys
-from . import rThetaFromXY, fitSmoothedSpline
-from . import deprojectArm
+from scipy.interpolate import interp1d
+from types import SimpleNamespace
+from . import rThetaFromXY, xyFromRTheta, deprojectArm
 from . import metric
 from . import clustering
 from . import cleaning
@@ -10,12 +10,16 @@ from . import ordering
 
 
 class GZBArm(object):
-    def __init__(self, drawnArms):
+    def __init__(self, drawnArms, imageSize=512):
         self.drawnArms = drawnArms
         self.pointCloud = np.array([
             point for arm in drawnArms
             for point in arm
         ])
+        self.imageSize = imageSize
+
+    def deNorm(self, a):
+        return (a + 0.5) * self.imageSize
 
     def clean(self):
         self.clf, self.outlierMask = cleaning.cleanPoints(self.pointCloud)
@@ -24,67 +28,71 @@ class GZBArm(object):
 
     def chooseRepresentativeArm(self):
         try:
-            self.armyArm = ordering.findArmyArm(self.drawnArms, self.clf)
+            armyArm = ordering.findArmyArm(self.drawnArms, self.clf)
         except AttributeError:
             self.clean()
-            self.armyArm = ordering.findArmyArm(self.drawnArms, self.clf)
-        return self.armyArm
+            armyArm = ordering.findArmyArm(self.drawnArms, self.clf)
+        return armyArm
 
-    def orderAlongArm(self, arm=None, deviation=False):
-        try:
-            chosenArm = arm if arm else self.armyArm
-        except AttributeError:
-            self.chooseRepresentativeArm()
-            chosenArm = arm if arm else self.armyArm
-
-        self.deviationCloud = np.transpose(
-            ordering.getDistAlongPolyline(self.cleanedCloud, chosenArm)
+    def orderAlongArm(self, arm):
+        result = SimpleNamespace()
+        result.deviationCloud = np.transpose(
+            ordering.getDistAlongPolyline(self.cleanedCloud, arm)
         )
 
-        deviationEnvelope = np.abs(self.deviationCloud[:, 1]) < 30
+        deviationEnvelope = np.abs(result.deviationCloud[:, 1]) < 30
         startEndMask = np.logical_and(
-            self.deviationCloud[:, 0] > 0,
-            self.deviationCloud[:, 0] < chosenArm.shape[0]
+            result.deviationCloud[:, 0] > 0,
+            result.deviationCloud[:, 0] < arm.shape[0]
         )
 
-        self.totalMask = np.logical_and(deviationEnvelope, startEndMask)
+        totalMask = np.logical_and(deviationEnvelope, startEndMask)
 
-        self.pointOrder = np.argsort(self.deviationCloud[self.totalMask, 0])
-        self.orderedPoints = self.cleanedCloud[self.totalMask][self.pointOrder]
+        unMaskedOrder = np.argsort(
+            result.deviationCloud[totalMask, 0]
+        )
+        result.pointOrder = np.where(totalMask)[0][unMaskedOrder]
+        result.orderedPoints = (
+            self.cleanedCloud[result.pointOrder]
+        )
+        return result
 
-        if deviation:
-            return self.pointOrder, self.deviationCloud
-        return self.pointOrder
-
-    def fitSpline(self):
-        t = self.deviationCloud[self.totalMask, 0][self.pointOrder].copy()
+    def genTFromOrdering(self, ordering):
+        t = ordering.deviationCloud[ordering.pointOrder, 0].copy()
         t /= np.max(t)
+        # ensure it's strictly monotonically increasing
         mask = t[1:] - t[:-1] <= 0
         while np.any(mask):
             mask = t[1:] - t[:-1] <= 0
             t[1:][mask] += 0.0001
+        t /= np.max(t)
+        return t
 
-        t = np.linspace(0, 1, self.orderedPoints.shape[0])
-        Sx = UnivariateSpline(t, self.orderedPoints[:, 0], k=5)
-        Sy = UnivariateSpline(t, self.orderedPoints[:, 1], k=5)
+    def fitXYSpline(self, ordering, t):
+        normalisedPoints = (ordering.orderedPoints / self.imageSize - 0.5)
+        Sx = UnivariateSpline(t, normalisedPoints[:, 0], k=5, s=0.25)
+        Sy = UnivariateSpline(t, normalisedPoints[:, 1], k=5, s=0.25)
         return (Sx, Sy)
 
-    def deproject(self, phi, ba, imageSize):
-        deprojectedArms = np.array([
-            deprojectArm(phi, ba, arm / imageSize - 0.5)
-            for arm in self.drawnArms
-        ])
-        return GZBArm(deprojectedArms)
+    def deproject(self, phi, ba):
+        dp = lambda arr: (deprojectArm(
+            phi, ba,
+            arr / self.imageSize - 0.5
+        ) + 0.5) * self.imageSize
 
-    def toRadial(self, points=None, mux=0, muy=0):
-        if points is None:
-            pointsToConvert = self.pointCloud[self.pointOrder]
-        else:
-            pointsToConvert = points
-        return rThetaFromXY(
-            *pointsToConvert.T,
-            mux=0, muy=0
-        )
+        deprojected = GZBArm(np.array([
+            dp(arm)
+            for arm in self.drawnArms
+        ]))
+        try:
+            deprojected.pointCloud = dp(self.pointCloud)
+            deprojected.cleanedCloud = (
+                deprojected.pointCloud[self.outlierMask]
+            )
+
+        except AttributeError:
+            pass
+        return deprojected
 
 
 class GalaxySpirals(object):
@@ -93,10 +101,6 @@ class GalaxySpirals(object):
         self.ba = ba
         self.phi = phi
         self.imageSize = imageSize
-        self.deprojectedArms = np.array([
-            deprojectArm(phi, ba, arm / imageSize - 0.5)
-            for arm in drawnArms
-        ])
 
     def calculateDistances(self):
         self.distances = metric.calculateDistanceMatrix(self.drawnArms)
@@ -113,16 +117,58 @@ class GalaxySpirals(object):
                 self.distances = metric.calculateDistanceMatrix(self.drawnArms)
                 self.db = clustering.clusterArms(self.distances)
             self.arms = [
-                GZBArm(self.drawnArms[self.db.labels_ == i])
+                GZBArm(self.drawnArms[self.db.labels_ == i], self.imageSize)
                 for i in range(np.max(self.db.labels_) + 1)
             ]
         return self.db
 
-    def fitArms(self):
+    def fitArms(self, t=np.linspace(0, 1, 1000)):
+        result = SimpleNamespace(
+            xySplines=[],
+            deprojectedArms=[],
+            radialFit=[],
+        )
         for arm in self.arms:
             arm.clean()
-            arm.chooseRepresentativeArm()
-            arm.orderAlongArm()
+            representativeArm = arm.chooseRepresentativeArm()
+            ordering = arm.orderAlongArm(representativeArm)
+
+            chosenT = arm.genTFromOrdering(ordering)
+
+            Sx, Sy = arm.fitXYSpline(ordering, chosenT)
+            imageSpline = np.stack((Sx(t), Sy(t)), axis=1)
+
+            deprojectedSpline = deprojectArm(
+                self.phi, self.ba,
+                imageSpline
+            )
+
+            deprojectedArm = arm.deproject(self.phi, self.ba)
+            ordering2 = deprojectedArm.orderAlongArm(
+                arm.deNorm(deprojectedSpline)
+            )
+
+            deprojectedT = deprojectedArm.genTFromOrdering(ordering2)
+            orderedDeprojectedCloud = (
+                deprojectedArm.cleanedCloud[ordering2.pointOrder]
+            )
+            r, theta = rThetaFromXY(
+                *orderedDeprojectedCloud.T / 512 - 0.5,
+                mux=0, muy=0
+            )
+            aaR, aaTh = rThetaFromXY(
+                *(deprojectedSpline.T)
+            )
+
+            tFunc = interp1d(t, aaTh)
+
+            Sr = UnivariateSpline(deprojectedT, r, k=5)
+            xr, yr = xyFromRTheta(Sr(t), tFunc(t), mux=0, muy=0)
+
+            result.xySplines.append([Sx, Sy])
+            result.deprojectedArms.append(deprojectedArm)
+            result.radialFit.append(np.stack((xr, yr), axis=1))
+        return result
 
 
 def test():
