@@ -182,7 +182,7 @@ class GalaxySpirals(object):
 
             tFunc = interp1d(t, aaTh)
 
-            Sr = UnivariateSpline(deprojectedT, r, k=5, s=0.5)
+            Sr = UnivariateSpline(deprojectedT, r, k=5, s=1)
             xr, yr = xyFromRTheta(Sr(t), tFunc(t), mux=0, muy=0)
 
             result.deprojectedArms.append(deprojectedArm)
