@@ -1,5 +1,8 @@
 import numpy as np
-from scipy.interpolate import UnivariateSpline
+from scipy.interpolate import UnivariateSpline, splprep, splev
+from sklearn.cluster import AgglomerativeClustering
+from sklearn.neighbors import kneighbors_graph
+from sklearn.neighbors import NearestNeighbors
 from .metric import vCalcT
 
 
@@ -84,3 +87,57 @@ def getDistAlongPolyline(points, polyLine):
             * signs[optimumIndex[:, 0], optimumIndex[:, 1]]
         )
     )
+
+
+def getOrderedClusters(X):
+    knn_graph = kneighbors_graph(X, 30, include_self=False)
+
+    model = AgglomerativeClustering(
+        linkage='ward',
+        connectivity=knn_graph,
+        n_clusters=10
+    )
+    model.fit(X)
+    return model
+    means = np.array([
+        np.mean(X[model.labels_ == l], axis=0)
+        for l in range(max(model.labels_) + 1)
+    ])
+    nn = NearestNeighbors(3, algorithm='kd_tree')
+    nn.fit(means)
+
+    foo = np.array([nn.kneighbors([p], 3, True) for p in means])[:, :, :, 1:]
+
+    # find an endpoint
+    endpoint = np.floor_divide(np.argsort(foo[:, 0].reshape(-1)), 2)[-1]
+    endpoint, foo
+    bar = [endpoint]
+    # iterate till end
+    for i in range(len(means) - 1):
+        dist, j = foo[int(bar[-1])].reshape(2, -1)
+        j = j.astype(int)
+        if j[0] in bar and j[1] in bar:
+            print('shit')
+            break
+        if j[0] in bar:
+            bar.append(j[1])
+        elif j[1] in bar:
+            bar.append(j[0])
+        else:
+            bar.append(j[np.argsort(dist)[0]])
+    return means
+
+
+def getSortingLine(normalisedMeans):
+    # mask to ensure no points are in the same place
+    separationMask = np.ones(normalisedMeans.shape[0], dtype=bool)
+    separationMask[1:] = np.linalg.norm(
+        normalisedMeans[1:] - normalisedMeans[:-1],
+        axis=1
+    ) != 0
+    # perform the interpolation
+    tck, u = splprep(normalisedMeans[separationMask].T, s=1, k=4)
+
+    unew = np.linspace(0, 1, 500)
+
+    return splev(unew, tck)
