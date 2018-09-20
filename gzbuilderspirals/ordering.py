@@ -116,7 +116,6 @@ def getOrderedClusters(X):
         dist, j = foo[int(bar[-1])].reshape(2, -1)
         j = j.astype(int)
         if j[0] in bar and j[1] in bar:
-            print('shit')
             break
         if j[0] in bar:
             bar.append(j[1])
@@ -135,7 +134,7 @@ def getSortingLine(normalisedMeans):
         axis=1
     ) != 0
     # perform the interpolation
-    tck, u = splprep(normalisedMeans[separationMask].T, s=0.0001, k=4)
+    tck, u = splprep(normalisedMeans[separationMask].T, s=0.01, k=3)
 
     unew = np.linspace(0, 1, 500)
 
