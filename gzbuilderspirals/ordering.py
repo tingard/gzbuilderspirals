@@ -98,7 +98,6 @@ def getOrderedClusters(X):
         n_clusters=10
     )
     model.fit(X)
-    return model
     means = np.array([
         np.mean(X[model.labels_ == l], axis=0)
         for l in range(max(model.labels_) + 1)
@@ -125,7 +124,7 @@ def getOrderedClusters(X):
             bar.append(j[0])
         else:
             bar.append(j[np.argsort(dist)[0]])
-    return means
+    return means[bar]
 
 
 def getSortingLine(normalisedMeans):
@@ -136,8 +135,8 @@ def getSortingLine(normalisedMeans):
         axis=1
     ) != 0
     # perform the interpolation
-    tck, u = splprep(normalisedMeans[separationMask].T, s=1, k=4)
+    tck, u = splprep(normalisedMeans[separationMask].T, s=0.0001, k=4)
 
     unew = np.linspace(0, 1, 500)
 
-    return splev(unew, tck)
+    return np.array(splev(unew, tck)).T

@@ -36,31 +36,48 @@ class GZBArm(object):
             armyArm = ordering.findArmyArm(self.drawnArms, self.clf)
         return armyArm
 
-    def orderAlongArm(self, arm):
-        result = SimpleNamespace()
-        result.deviationCloud = np.transpose(
+    def fit(self, n=2):
+        # cluster the arm into groups, then order these groups using their
+        # nearest neighbors
+        means = ordering.getOrderedClusters(self.cleanedCloud)
+        # get a smoothed line from these points to order the cloud along
+        sortingLine = self.deNorm(
+            ordering.getSortingLine(self.normalise(means))
+        )
+        # order the cloud (returns deviaion, point order and ordered points)
+        orderObject = self.orderAlongPolyLine(sortingLine)
+        # fit a smooth spline to the ordered points
+        fit = self.deNorm(
+            self.fitSpline(orderObject)
+        )
+        # return fit
+        return fit
+
+    def orderAlongPolyLine(self, arm):
+        result = {}
+        result['deviationCloud'] = np.transpose(
             ordering.getDistAlongPolyline(self.cleanedCloud, arm)
         )
 
-        deviationEnvelope = np.abs(result.deviationCloud[:, 1]) < 30
+        deviationEnvelope = np.abs(result['deviationCloud'][:, 1]) < 30
         startEndMask = np.logical_and(
-            result.deviationCloud[:, 0] > 0,
-            result.deviationCloud[:, 0] < arm.shape[0]
+            result['deviationCloud'][:, 0] > 0,
+            result['deviationCloud'][:, 0] < arm.shape[0]
         )
 
         totalMask = np.logical_and(deviationEnvelope, startEndMask)
 
         unMaskedOrder = np.argsort(
-            result.deviationCloud[totalMask, 0]
+            result['deviationCloud'][totalMask, 0]
         )
-        result.pointOrder = np.where(totalMask)[0][unMaskedOrder]
-        result.orderedPoints = (
-            self.cleanedCloud[result.pointOrder]
+        result['pointOrder'] = np.where(totalMask)[0][unMaskedOrder]
+        result['orderedPoints'] = (
+            self.cleanedCloud[result['pointOrder']]
         )
         return result
 
     def genTFromOrdering(self, ordering):
-        t = ordering.deviationCloud[ordering.pointOrder, 0].copy()
+        t = ordering['deviationCloud'][ordering['pointOrder'], 0].copy()
         # ensure it's strictly monotonically increasing
         mask = t[1:] - t[:-1] <= 0
         while np.any(mask):
@@ -72,8 +89,8 @@ class GZBArm(object):
         t /= np.max(t)
         return t
 
-    def fitSpline(self, ordering):
-        normalisedPoints = self.normalise(ordering.orderedPoints)
+    def fitSpline(self, ordering, splineKwargs={}):
+        normalisedPoints = self.normalise(ordering['orderedPoints'])
         # mask to ensure no points are in the same place
         pm = np.ones(normalisedPoints.shape[0], dtype=bool)
         pm[1:] = np.linalg.norm(
@@ -81,7 +98,9 @@ class GZBArm(object):
             axis=1
         ) != 0
         # perform the interpolation
-        tck, u = splprep(normalisedPoints[pm].T, s=1, k=4)
+        splineKwargs.setdefault('s', 1)
+        splineKwargs.setdefault('k', 4)
+        tck, u = splprep(normalisedPoints[pm].T, **splineKwargs)
         return np.array(splev(u, tck)).T
 
     def deproject(self, phi, ba):
@@ -131,46 +150,50 @@ class GalaxySpirals(object):
         return self.db
 
     def fitXYSplines(self):
-        result = SimpleNamespace(
-            representativeArms=[],
-            orderings=[],
-            fits=[],
-        )
+        fits = []
         for arm in self.arms:
             arm.clean()
-            representativeArm = arm.chooseRepresentativeArm()
-            ordering = arm.orderAlongArm(representativeArm)
+            fit = arm.fit()
 
-            fit = arm.fitSpline(ordering)
+            fits.append(fit)
+        return fits
 
-            result.representativeArms.append(representativeArm)
-            result.orderings.append(ordering)
-            result.fits.append(fit)
-        return result
-
-    def fitRadialSplines(self, xyResult):
-        result = SimpleNamespace(
-            deprojectedArms=[],
-            radialFit=[],
-            orderings=[],
-        )
+    def fitRadialSplines(self, xyFits):
+        result = {
+            'deprojectedArms': [],
+            'radialFit': [],
+            'deprojectedFit': [],
+            'orderings': [],
+        }
         for i, arm in enumerate(self.arms):
-            xyFit = xyResult.fits[i]
+            xyFit = xyFits[i]
+
+            # we parametrise along the xyFit line from 0 to 1. Each vertex on
+            # the line is evenly spaced regardless of edge length
             t = np.linspace(0, 1, xyFit.shape[0])
 
+            # Deproject this fitted arm
             deprojectedXYFit = deprojectArm(
                 self.phi, self.ba,
-                xyFit
+                arm.normalise(xyFit)
             )
 
+            # Deproject the arm object
             deprojectedArm = arm.deproject(self.phi, self.ba)
-            ordering = deprojectedArm.orderAlongArm(
+            # Fit the deprojected arm object in XY (for comparison)
+            deprojectedFit = deprojectedArm.fit()
+
+            # order the arm along the deprojected XY fit
+            ordering = deprojectedArm.orderAlongPolyLine(
                 arm.deNorm(deprojectedXYFit)
             )
 
+            # calculate a strictly monotonic t array for points along this arm
             deprojectedT = deprojectedArm.genTFromOrdering(ordering)
+
+            #
             orderedDeprojectedCloud = (
-                deprojectedArm.cleanedCloud[ordering.pointOrder]
+                deprojectedArm.cleanedCloud[ordering['pointOrder']]
             )
             r, theta = rThetaFromXY(
                 *arm.normalise(orderedDeprojectedCloud).T,
@@ -180,12 +203,15 @@ class GalaxySpirals(object):
                 *(deprojectedXYFit.T)
             )
 
-            tFunc = interp1d(t, aaTh)
+            thetaFunc = interp1d(t, aaTh)
 
             Sr = UnivariateSpline(deprojectedT, r, k=4, s=1)
-            xr, yr = xyFromRTheta(Sr(t), tFunc(t), mux=0, muy=0)
+            xr, yr = xyFromRTheta(Sr(t), thetaFunc(t), mux=0, muy=0)
 
-            result.deprojectedArms.append(deprojectedArm)
-            result.orderings.append(ordering)
-            result.radialFit.append(np.stack((xr, yr), axis=1))
+            result['deprojectedArms'].append(deprojectedArm)
+            result['orderings'].append(ordering)
+            result['radialFit'].append(np.stack((xr, yr), axis=1))
+            result['r'].append(Sr(t))
+            result['r'].append(thetaFunc(t))
+            result['deprojectedFit'].append(deprojectedFit)
         return result
