@@ -26,6 +26,10 @@ def log(s, flag=True):
         print(s)
 
 
+null = None
+true = True
+false = False
+
 def getDrawnArms(id, classifications):
     annotationsForSubject = [
         eval(foo) for foo in
