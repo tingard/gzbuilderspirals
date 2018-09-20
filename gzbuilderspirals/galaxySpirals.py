@@ -81,7 +81,7 @@ class GZBArm(object):
             axis=1
         ) != 0
         # perform the interpolation
-        tck, u = splprep(normalisedPoints[pm].T, s=1, k=5)
+        tck, u = splprep(normalisedPoints[pm].T, s=1, k=4)
         return np.array(splev(u, tck)).T
 
     def deproject(self, phi, ba):
@@ -182,7 +182,7 @@ class GalaxySpirals(object):
 
             tFunc = interp1d(t, aaTh)
 
-            Sr = UnivariateSpline(deprojectedT, r, k=5, s=1)
+            Sr = UnivariateSpline(deprojectedT, r, k=4, s=1)
             xr, yr = xyFromRTheta(Sr(t), tFunc(t), mux=0, muy=0)
 
             result.deprojectedArms.append(deprojectedArm)
