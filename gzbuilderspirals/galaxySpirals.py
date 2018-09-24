@@ -101,6 +101,7 @@ class GZBArm(object):
         ]))
         try:
             deprojected.pointCloud = dp(self.pointCloud)
+            deprojected.outlierMask = self.outlierMask
             deprojected.cleanedCloud = (
                 deprojected.pointCloud[self.outlierMask]
             )
@@ -182,7 +183,7 @@ class GalaxySpirals(object):
 
             thetaFunc = interp1d(t, aaTh)
 
-            Sr = UnivariateSpline(deprojectedT, r / max(r), k=3, s=5)
+            Sr = UnivariateSpline(deprojectedT, r / max(r), k=3)
             xr, yr = xyFromRTheta(Sr(t) * max(r), thetaFunc(t), mux=0, muy=0)
 
             result['deprojectedArms'].append(deprojectedArm)

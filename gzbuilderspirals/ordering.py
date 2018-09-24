@@ -95,7 +95,7 @@ def getOrderedClusters(X):
     model = AgglomerativeClustering(
         linkage='ward',
         connectivity=knn_graph,
-        n_clusters=10
+        n_clusters=6
     )
     model.fit(X)
     means = np.array([

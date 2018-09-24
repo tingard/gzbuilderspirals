@@ -59,7 +59,7 @@ def getDrawnArms(id, classifications):
 
 def deprojectArm(phi, ba, arm):
     p = np.deg2rad(phi)
-    Xs = (1 / ba) * (arm[:, 0] * np.cos(p) - arm[:, 1] * np.sin(p))
-    Ys = 1 * (arm[:, 0] * np.sin(p) + arm[:, 1] * np.cos(p))
+    Xs = 1 * (arm[:, 0] * np.cos(p) - arm[:, 1] * np.sin(p))
+    Ys = (1 / ba) * (arm[:, 0] * np.sin(p) + arm[:, 1] * np.cos(p))
 
     return np.stack((Xs, Ys), axis=1)
