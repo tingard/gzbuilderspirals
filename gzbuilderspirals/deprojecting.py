@@ -1,7 +1,10 @@
+from tempfile import NamedTemporaryFile
 import numpy as np
 from astropy.wcs import WCS
 from skimage.transform import rotate, rescale
-
+import astropy.units as u
+import re
+import subprocess
 
 def getFitsName(galaxy):
     # Lookup the source fits file (needed for the rotation matrix)
@@ -17,7 +20,10 @@ def createWCSObject(galaxy, imageSize, fileName=None):
     wFits = WCS(fileName if fileName is not None else getFitsName(galaxy))
 
     # The SDSS pixel scale is 0.396 arc-seconds
-    fits_cdelt = 0.396 / 3600
+    try:
+        fits_cdelt = wFits.wcs.cdelt
+    except AttributeError:
+        fits_cdelt = [0.396 / 3600]*2
 
     # cutouts were chosen to be 4x Petrosean radius, and then scaled
     # (including interpolation) to be 512x512 pixels
@@ -35,40 +41,59 @@ def createWCSObject(galaxy, imageSize, fileName=None):
 
     # Copy the rotation matrix from the source FITS file, adjusting the
     # scaling as needed
-    w.wcs.cd = [
-        wFits.wcs.cd[0] / fits_cdelt * scale,
-        wFits.wcs.cd[1] / fits_cdelt * scale
-    ]
+    print('[createWCSObject] Checking for transformation')
+    if wFits.wcs.has_pc():
+        print('[createWCSObject] Using PC')
+        # great, we have a pc rotation matrix, which we don't need to change
+        # edit the CDELT pixel scale values only
+        w.wcs.cdelt[0] /= fits_cdelt[0] * scale
+        w.wcs.cdelt[1] /= fits_cdelt[1] * scale
+    elif wFits.wcs.has_cd():
+        # fits is using the older standard of PCi_j rotation. Edid this 2d
+        # matrix with the new scale values
+        print('[createWCSObject] Using CD')
+        w.wcs.cd = [
+            wFits.wcs.cd[0] / fits_cdelt[0] * scale,
+            wFits.wcs.cd[1] / fits_cdelt[1] * scale
+        ]
+    elif wFits.wcs.has_crota():
+        print('[createWCSObject] changing cdelt')
+        w.wcs.cdelt[0] /= fits_cdelt[0] * scale
+        w.wcs.cdelt[1] /= fits_cdelt[1] * scale
+    else:
+        print('Could not edit pixel scale')
     return w
 
 
-def getAngle(galaxy, wcs, imageSize):
-    r = float(galaxy['PETRO_THETA']) / 3600
-    phi = float(galaxy['SERSIC_PHI'])
+def getRotationMatrix(phi):
+    return [
+        [np.cos(phi), -np.sin(phi)],
+        [np.sin(phi), np.cos(phi)]
+    ]
 
-    cx, cy = imageSize / 2
-    wCx, wCy = float(galaxy['RA']), float(galaxy['DEC'])
 
-    # find our line in world coordinates
-    x = r * np.sin(np.deg2rad(phi)) + wCx
-    y = r * np.cos(np.deg2rad(-phi)) + wCy
+def getAngle(gal, fitsName, imageSize=np.array([512, 512])):
+    wFits = WCS(fitsName)
+    # edit to center on the galaxy
+    wFits.wcs.crval = [float(gal['RA']), float(gal['DEC'])]
+    wFits.wcs.crpix = imageSize
 
-    v = np.array([x - wCx, y - wCy])
-    v /= np.linalg.norm(v)
+    r = 4 * float(gal['PETRO_THETA']) / 3600
+    ba = float(gal['SERSIC_BA'])
+    phi = float(gal['SERSIC_PHI'])
 
-    ra_line, dec_line = wcs.wcs_world2pix([wCx, x], [wCy, y], 0)
+    centerPix, decLine = np.array(wFits.all_world2pix(
+        [gal['RA'].iloc[0], gal['RA'].iloc[0]],
+        [gal['DEC'].iloc[0], gal['DEC'].iloc[0] + r],
+        0
+    )).T
 
-    axis_vector = np.subtract.reduce(
-        np.stack(
-            (ra_line, dec_line),
-            axis=1
-        )
-    )
+    rot = getRotationMatrix(np.deg2rad(phi))
 
-    angle = 180 * np.arccos(
-        axis_vector[1] / np.linalg.norm(axis_vector)
-    ) / np.pi
-    return angle
+    vec = np.dot(rot, decLine - centerPix)
+    galaxyAxis = vec + centerPix
+    rotationAngle = 90 - np.rad2deg(np.arctan2(vec[1], vec[0])) - 90
+    return rotationAngle
 
 
 def deprojectArray(array, angle=0, ba=1):
