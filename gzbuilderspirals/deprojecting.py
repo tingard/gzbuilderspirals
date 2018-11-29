@@ -1,12 +1,9 @@
-from tempfile import NamedTemporaryFile
 import numpy as np
 from astropy.wcs import WCS
 from skimage.transform import rotate, rescale
-import astropy.units as u
-import re
-import subprocess
 
-def getFitsName(galaxy):
+
+def get_fits_name(galaxy):
     # Lookup the source fits file (needed for the rotation matrix)
     return 'fitsImages/{0}/{1}/frame-r-{0:06d}-{1}-{2:04d}.fits'.format(
         int(galaxy['RUN']),
@@ -15,13 +12,15 @@ def getFitsName(galaxy):
     )
 
 
-def createWCSObject(galaxy, imageSize, fileName=None):
+def create_WCS_object(galaxy, image_size, file_name=None):
     # Load a WCS object from the FITS image
-    wFits = WCS(fileName if fileName is not None else getFitsName(galaxy))
+    wcs_fits = WCS(
+        file_name if file_name is not None else get_fits_name(galaxy)
+    )
 
     # The SDSS pixel scale is 0.396 arc-seconds
     try:
-        fits_cdelt = wFits.wcs.cdelt
+        fits_cdelt = wcs_fits.wcs.cdelt
     except AttributeError:
         fits_cdelt = [0.396 / 3600]*2
 
@@ -42,21 +41,21 @@ def createWCSObject(galaxy, imageSize, fileName=None):
     # Copy the rotation matrix from the source FITS file, adjusting the
     # scaling as needed
     print('[createWCSObject] Checking for transformation')
-    if wFits.wcs.has_pc():
+    if wcs_fits.wcs.has_pc():
         print('[createWCSObject] Using PC')
         # great, we have a pc rotation matrix, which we don't need to change
         # edit the CDELT pixel scale values only
         w.wcs.cdelt[0] /= fits_cdelt[0] * scale
         w.wcs.cdelt[1] /= fits_cdelt[1] * scale
-    elif wFits.wcs.has_cd():
+    elif wcs_fits.wcs.has_cd():
         # fits is using the older standard of PCi_j rotation. Edid this 2d
         # matrix with the new scale values
         print('[createWCSObject] Using CD')
         w.wcs.cd = [
-            wFits.wcs.cd[0] / fits_cdelt[0] * scale,
-            wFits.wcs.cd[1] / fits_cdelt[1] * scale
+            wcs_fits.wcs.cd[0] / fits_cdelt[0] * scale,
+            wcs_fits.wcs.cd[1] / fits_cdelt[1] * scale
         ]
-    elif wFits.wcs.has_crota():
+    elif wcs_fits.wcs.has_crota():
         print('[createWCSObject] changing cdelt')
         w.wcs.cdelt[0] /= fits_cdelt[0] * scale
         w.wcs.cdelt[1] /= fits_cdelt[1] * scale
@@ -65,44 +64,55 @@ def createWCSObject(galaxy, imageSize, fileName=None):
     return w
 
 
-def getRotationMatrix(phi):
+def get_rotation_matrix(phi):
     return [
         [np.cos(phi), -np.sin(phi)],
         [np.sin(phi), np.cos(phi)]
     ]
 
 
-def getAngle(gal, fitsName, imageSize=np.array([512, 512])):
-    wFits = WCS(fitsName)
+def get_angle(gal, fits_name, image_size=np.array([512, 512])):
+    wFits = WCS(fits_name)
     # edit to center on the galaxy
     wFits.wcs.crval = [float(gal['RA']), float(gal['DEC'])]
-    wFits.wcs.crpix = imageSize
+    wFits.wcs.crpix = image_size
 
     r = 4 * float(gal['PETRO_THETA']) / 3600
-    ba = float(gal['SERSIC_BA'])
     phi = float(gal['SERSIC_PHI'])
 
-    centerPix, decLine = np.array(wFits.all_world2pix(
+    center_pix, dec_line = np.array(wFits.all_world2pix(
         [gal['RA'].iloc[0], gal['RA'].iloc[0]],
         [gal['DEC'].iloc[0], gal['DEC'].iloc[0] + r],
         0
     )).T
 
-    rot = getRotationMatrix(np.deg2rad(phi))
-
-    vec = np.dot(rot, decLine - centerPix)
-    galaxyAxis = vec + centerPix
-    rotationAngle = 90 - np.rad2deg(np.arctan2(vec[1], vec[0])) - 90
-    return rotationAngle
+    rot = get_rotation_matrix(np.deg2rad(phi))
+    vec = np.dot(rot, dec_line - center_pix)
+    rotation_angle = 90 - np.rad2deg(np.arctan2(vec[1], vec[0])) - 90
+    return rotation_angle
 
 
-def deprojectArray(array, angle=0, ba=1):
-    rotatedImage = rotate(array, angle)
-    stretchedImage = rescale(rotatedImage, (1, 1 / ba))
-    n = int((stretchedImage.shape[1] - array.shape[1]) / 2)
+def deproject_array(array, angle=0, ba=1):
+    rotated_image = rotate(array, angle)
+    stretched_image = rescale(rotated_image, (1, 1 / ba))
+    n = int((stretched_image.shape[1] - array.shape[1]) / 2)
 
     if n > 0:
-        deprojectedImage = stretchedImage[:, n:-n]
+        deprojected_image = stretched_image[:, n:-n]
     else:
-        deprojectedImage = stretchedImage.copy()
-    return deprojectedImage
+        deprojected_image = stretched_image.copy()
+    return deprojected_image
+
+
+def deproject_arm(phi, ba, arm):
+    p = np.deg2rad(phi)
+    xs = 1 * (arm[:, 0] * np.cos(p) - arm[:, 1] * np.sin(p))
+    ys = (1 / ba) * (arm[:, 0] * np.sin(p) + arm[:, 1] * np.cos(p))
+    return np.stack((xs, ys), axis=1)
+
+
+def reproject_arm(phi, ba, arm):
+    return deproject_arm(
+        -phi, 1,
+        deproject_arm(0, 1/ba, arm)
+    )

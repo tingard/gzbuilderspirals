@@ -1,7 +1,7 @@
 from sklearn.cluster import DBSCAN
 
 
-def clusterArms(distances):
+def cluster_arms(distances):
     return DBSCAN(
         eps=400,
         min_samples=4,

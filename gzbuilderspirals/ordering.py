@@ -3,10 +3,10 @@ from scipy.interpolate import UnivariateSpline, splprep, splev
 from sklearn.cluster import AgglomerativeClustering
 from sklearn.neighbors import kneighbors_graph
 from sklearn.neighbors import NearestNeighbors
-from .metric import vCalcT
+from .metric import v_calc_t
 
 
-def findArmyArm(arms, clf, smooth=True):
+def find_army_arm(arms, clf, smooth=True):
     i = np.argmax([
         np.sum(clf._decision_function(arm)) / arm.shape[0]
         for arm in arms
@@ -20,9 +20,9 @@ def findArmyArm(arms, clf, smooth=True):
     Sx = UnivariateSpline(t, arm[:, 0], s=512, k=5)
     Sy = UnivariateSpline(t, arm[:, 1], s=512, k=5)
 
-    smoothedArm = np.stack((Sx(t), Sy(t)), axis=1)
+    smoothed_arm = np.stack((Sx(t), Sy(t)), axis=1)
 
-    return smoothedArm
+    return smoothed_arm
 
 
 def sign(a):
@@ -35,61 +35,67 @@ def sign(a):
     return s
 
 
-def getDiff2(t, a):
+def get_diff2(t, a):
     projection = a[:, 1, :] + np.repeat(
         t.reshape(-1, 1), 2, axis=1) * (a[:, 2, :] - a[:, 1, :])
-    outsideBounds = np.logical_or(t < 0, t > 1)
+    outside_bounds = np.logical_or(t < 0, t > 1)
     out = np.add.reduce(
         (a[:, 0, :] - projection) * (a[:, 0, :] - projection),
         axis=1
     )
-    endPointDistance = np.amin([
-        np.add.reduce((a[outsideBounds, 1] - a[outsideBounds, 0])**2, axis=1),
-        np.add.reduce((a[outsideBounds, 2] - a[outsideBounds, 0])**2, axis=1)
+    end_point_distance = np.amin([
+        np.add.reduce(
+            (a[outside_bounds, 1] - a[outside_bounds, 0])**2,
+            axis=1
+        ),
+        np.add.reduce(
+            (a[outside_bounds, 2] - a[outside_bounds, 0])**2,
+            axis=1
+        )
     ], axis=0)
     # If we have gone beyond endpoints, set distance to be the distance to the
     # end point (rather than to a continuation of the line)
-    out[outsideBounds] = endPointDistance
+    out[outside_bounds] = end_point_distance
     return np.sqrt(out)
 
 
-vGetDiff2 = np.vectorize(getDiff2, signature='(a),(a,b,c)->(a)')
-vSign = np.vectorize(sign, signature='(a,b,c)->(a)')
+v_get_diff2 = np.vectorize(get_diff2, signature='(a),(a,b,c)->(a)')
+v_sign = np.vectorize(sign, signature='(a,b,c)->(a)')
 
 
-def getDistAlongPolyline(points, polyLine):
+def get_dist_along_polyline(points, poly_line):
     # construct our tensor (allowing vectorization)
     # m{i, j, k, p}
     # i iterates over each point in a
     # j cycles through each pair of points in b
     # k cycles through (a[i], b[j], b[j+1])
     # p represents [x, y]
-    m = np.zeros((points.shape[0], polyLine.shape[0] - 1, 3, 2))
+    m = np.zeros((points.shape[0], poly_line.shape[0] - 1, 3, 2))
     m[:, :, 0, :] = np.transpose(
         np.tile(points, [m.shape[1] + 1, 1, 1]), axes=[1, 0, 2]
     )[:, :-1, :]
-    m[:, :, 1, :] = np.tile(polyLine, [points.shape[0], 1, 1])[:, :-1, :]
+    m[:, :, 1, :] = np.tile(poly_line, [points.shape[0], 1, 1])[:, :-1, :]
     m[:, :, 2, :] = np.tile(
-        np.roll(polyLine, -1, axis=0), [points.shape[0], 1, 1]
+        np.roll(poly_line, -1, axis=0), [points.shape[0], 1, 1]
     )[:, :-1, :]
 
-    t = vCalcT(m)
-    signs = vSign(m)
-    distances = vGetDiff2(t, m)
-    minDistIndex = np.argmin(distances, axis=1)
-    optimumIndex = np.dstack(
-        (np.arange(minDistIndex.shape[0]), minDistIndex)
+    t = v_calc_t(m)
+    signs = v_sign(m)
+    distances = v_get_diff2(t, m)
+    min_dist_index = np.argmin(distances, axis=1)
+    optimum_index = np.dstack(
+        (np.arange(min_dist_index.shape[0]), min_dist_index)
     )[0]
     return (
-        minDistIndex + t[optimumIndex[:, 0], optimumIndex[:, 1]],
+        min_dist_index + t[optimum_index[:, 0], optimum_index[:, 1]],
         (
-            distances[optimumIndex[:, 0], optimumIndex[:, 1]]
-            * signs[optimumIndex[:, 0], optimumIndex[:, 1]]
+            distances[optimum_index[:, 0], optimum_index[:, 1]]
+            * signs[optimum_index[:, 0], optimum_index[:, 1]]
         )
     )
 
 
-def getOrderedClusters(X):
+def get_ordered_clusters(X):
     knn_graph = kneighbors_graph(X, 30, include_self=False)
 
     model = AgglomerativeClustering(
@@ -109,7 +115,7 @@ def getOrderedClusters(X):
 
     # find an endpoint
     endpoint = np.floor_divide(np.argsort(foo[:, 0].reshape(-1)), 2)[-1]
-    endpoint, foo
+
     bar = [endpoint]
     # iterate till end
     for i in range(len(means) - 1):
@@ -126,15 +132,15 @@ def getOrderedClusters(X):
     return means[bar]
 
 
-def getSortingLine(normalisedMeans):
+def get_sorting_line(normalised_means):
     # mask to ensure no points are in the same place
-    separationMask = np.ones(normalisedMeans.shape[0], dtype=bool)
-    separationMask[1:] = np.linalg.norm(
-        normalisedMeans[1:] - normalisedMeans[:-1],
+    separation_mask = np.ones(normalised_means.shape[0], dtype=bool)
+    separation_mask[1:] = np.linalg.norm(
+        normalised_means[1:] - normalised_means[:-1],
         axis=1
     ) != 0
     # perform the interpolation
-    tck, u = splprep(normalisedMeans[separationMask].T, s=0.01, k=3)
+    tck, u = splprep(normalised_means[separation_mask].T, s=0.01, k=3)
 
     unew = np.linspace(0, 1, 500)
 

@@ -1,17 +1,7 @@
 import numpy as np
-from sklearn.cluster import DBSCAN
-from scipy.interpolate import UnivariateSpline
-import sys
-import metric
-import clustering
-import cleaning
-import ordering
-
-
-def _log(s, flag=True, stepCount=-1, nSteps=8):
-    if flag:
-        preamble = '[{} / {}]'.format(stepCount, nSteps) if stepCount >= 0
-        print('{} {}'.format(s, stepCount, maxSteps))
+from sklearn.model_selection import GroupKFold
+from . import metric, clustering, cleaning, deprojecting, fitting
+from . import r_theta_from_xy, get_sample_weight, equalize_arm_length, _vprint
 
 
 def usage():
@@ -24,76 +14,98 @@ def usage():
     print('verbose: whether to print logging information to the screen')
 
 
-def fit(
-    drawnArms, imageSize=512, verbose=True, fullOutput=True, phi=0, ba=1
+def _pipeline_iterator(
+    drawn_arms, image_size=512, phi=0, ba=1, distances=None,
+    clean_points=False,
 ):
-    if not isinstance(drawnArms, np.array):
-        usage()
-        sys.exit(0)
-    _log('Calculating distance matrix (this can be slow)', 1, verbose)
-    functions = []
-    clfs = []
-    distances = metric.calculateDistanceMatrix(drawnArms)
-    _log('Clustering arms', 2, verbose)
-    db = clustering.clusterArms(distances)
-
-    for label in np.unique(db.labels_):
-        if label < 0:
-            continue
-        _log('Working on arm label {}'.format(label), 3, verbose)
-        pointCloud = np.array([
-            point for arm in drawnArms[db.labels_ == label]
-            for point in arm
-        ])
-        _log(
-            'Cleaning points ({} total)'.format(pointCloud.shape[0]),
-            4,
-            verbose
+    """Iterator to cycle through pipeline steps
+    """
+    drawn_arms = np.array(equalize_arm_length(np.array(drawn_arms)))
+    yield drawn_arms  # Yield the equalised drawn arms
+    if distances is None:
+        distances = metric.calculate_distance_matrix(drawn_arms)
+    # Yield the calculated distance matrix
+    yield distances
+    db = clustering.cluster_arms(distances)
+    # Yield the labels of clustered arms
+    yield db.labels_
+    out = []
+    for i in range(np.max(db.labels_) + 1):
+        arms = drawn_arms[db.labels_ == i]
+        coords, groups_all = cleaning.get_grouped_data(arms)
+        deprojected_coords = deprojecting.deproject_arm(
+            phi, ba,
+            coords / image_size - 0.5
         )
-        clf, mask = cleaning.cleanPoints(pointCloud)
-        clfs.append(clf)
-        cleanedCloud = pointCloud[mask]
-        _log('\t[2 / 4] Identifiying most representitive arm', verbose)
-        armyArm = ordering.findArmyArm(drawnArms[db.labels_ == label], clf)
-        _log('\t[3 / 4] Sorting points', verbose)
-        deviationCloud = np.transpose(
-            ordering.getDistAlongPolyline(cleanedCloud, armyArm)
+        # Yield the deprojected coordinates
+        yield deprojected_coords
+        R_all, t_all = r_theta_from_xy(*deprojected_coords.T)
+        t_all_unwrapped = fitting.unwrap(t_all, groups_all)
+        if clean_points:
+            outlier_mask = cleaning.clean_arms_polar(
+                R_all, t_all_unwrapped,
+                groups_all
+            )
+        else:
+            outlier_mask = np.ones(R_all.shape[0], dtype=bool)
+        # Yield the outlier mask
+        yield R_all, t_all_unwrapped, outlier_mask
+        groups = groups_all[outlier_mask]
+        R = R_all[outlier_mask].reshape(-1, 1)
+        t = t_all_unwrapped[outlier_mask]
+        point_weights = get_sample_weight(R.reshape(-1), groups)
+        # Yield the point weights
+        yield point_weights
+        gkf = GroupKFold(n_splits=min(3, len(np.unique(groups))))
+        logsp_model = fitting.get_polynomial_pipeline(1)
+        out_ = {}
+        s = fitting.weighted_group_cross_val(
+            logsp_model,
+            np.log(R), t,
+            cv=gkf,
+            groups=groups,
+            weights=point_weights
         )
-
-        deviationEnvelope = np.abs(deviationCloud[:, 1]) < 30
-        startEndMask = np.logical_and(
-            deviationCloud[:, 0] > 0,
-            deviationCloud[:, 0] < armyArm.shape[0]
+        out_['Log spiral'] = fitting.adjusted_r2(
+            s, t.shape[0], 2
         )
+        for degree in range(1, 9):
+            poly_model = fitting.get_polynomial_pipeline(degree)
+            s = fitting.weighted_group_cross_val(
+                poly_model,
+                R, t,
+                cv=gkf,
+                groups=groups,
+                weights=point_weights
+            )
+            out_['poly_spiral_{}'.format(degree)] = fitting.adjusted_r2(
+                s, t.shape[0], degree
+            )
+        # Yield the arm result
+        yield out_
+        out.append(out_)
+    # yield out
 
-        totalMask = np.logical_and(deviationEnvelope, startEndMask)
 
-        pointOrder = np.argsort(deviationCloud[totalMask, 0])
-
-        normalisedPoints = cleanedCloud[totalMask][pointOrder] / imageSize
-        normalisedPoints -= 0.5
-
-        log('\t[4 / 4] Fitting Spline', verbose)
-        t = np.linspace(0, 1, normalisedPoints.shape[0])
-        t = deviationCloud[totalMask, 0][pointOrder].copy()
-        t /= np.max(t)
-        mask = t[1:] - t[:-1] <= 0
-        while np.any(mask):
-            mask = t[1:] - t[:-1] <= 0
-            t[1:][mask] += 0.0001
-
-        Sx = UnivariateSpline(t, normalisedPoints[:, 0], k=5)
-        Sy = UnivariateSpline(t, normalisedPoints[:, 1], k=5)
-
-        functions.append([Sx, Sy])
-    log('done!', verbose)
-    if not fullOutput:
-        return functions
-
-    returns = {
-        'functions': functions,
-        'distances': distances,
-        'LOF': clfs,
-        'labels': db.labels_
-    }
-    return returns
+def model_selection_pipeline(*args, verbose=False, **kwargs):
+    gen = _pipeline_iterator(*args, **kwargs)
+    v = verbose
+    _vprint(v, '1 - equalising arm length')
+    drawn_arms = next(gen)
+    _vprint(v, '2 - calculating distance matrix')
+    distances = next(gen)
+    _vprint(v, '3 - clustering arms')
+    labels = next(gen)
+    out = []
+    for i in range(np.max(labels) + 1):
+        _vprint(v, 'Arm', i)
+        _vprint(v, '\t1 - deprojecting arm')
+        deprojected_coords = next(gen)
+        _vprint(v, '\t2 - cleaning points')
+        R_all, t_all_unwrapped, outlier_mask = next(gen)
+        _vprint(v, '\t3 - calculating weights')
+        point_weights = next(gen)
+        _vprint(v, '\t4 - performing group cross-validation')
+        out_ = next(gen)
+        out.append(out_)
+    return out

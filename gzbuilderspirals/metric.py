@@ -8,7 +8,7 @@ import numpy as np
 
 # calculate dot(a) of a(n,2), b(n,2): np.add.reduce(b1 * b2, axis=1)
 # calucalte norm(a) of a(n,2), b(n,2): np.add.reduce((a-b)**2, axis=1)
-def calcT(a):
+def calc_t(a):
     b1 = a[:, 0, :] - a[:, 1, :]
     b2 = a[:, 2, :] - a[:, 1, :]
     dots = np.add.reduce(b1 * b2, axis=1)
@@ -16,26 +16,26 @@ def calcT(a):
     return np.clip(dots / l2, 0, 1)
 
 
-def getDiff(t, a):
+def get_diff(t, a):
     projection = a[:, 1, :] + np.repeat(
         t.reshape(-1, 1), 2, axis=1) * (a[:, 2, :] - a[:, 1, :])
-    outsideBounds = np.logical_or(t < 0, t > 1)
+    outside_bounds = (t < 0) ^ (t > 1)
     out = np.add.reduce(
         (a[:, 0, :] - projection) * (a[:, 0, :] - projection),
         axis=1
     )
-    endPointDistance = np.amin([
-        np.add.reduce((a[outsideBounds, 1] - a[outsideBounds, 0])**2, axis=1),
-        np.add.reduce((a[outsideBounds, 2] - a[outsideBounds, 0])**2, axis=1)
+    end_point_distance = np.amin([
+        np.add.reduce((a[outside_bounds, 1] - a[outside_bounds, 0])**2, axis=1),
+        np.add.reduce((a[outside_bounds, 2] - a[outside_bounds, 0])**2, axis=1)
     ], axis=0)
     # If we have gone beyond endpoints, set distance to be the distance to the
     # end point (rather than to a continuation of the line)
-    out[outsideBounds] = endPointDistance
+    out[outside_bounds] = end_point_distance
     return np.min(out)
 
 
-vCalcT = np.vectorize(calcT, signature='(a,b,c)->(a)')
-vGetDiff = np.vectorize(getDiff, signature='(a),(a,b,c)->()')
+v_calc_t = np.vectorize(calc_t, signature='(a,b,c)->(a)')
+v_get_diff = np.vectorize(get_diff, signature='(a),(a,b,c)->()')
 
 
 def minimum_distance(a, b):
@@ -55,21 +55,20 @@ def minimum_distance(a, b):
         np.roll(b, -1, axis=0), [a.shape[0], 1, 1]
     )[:, :-1, :]
     # t[i, j] = ((a[i] - b[j]) . (b[j + 1] - b[j])) / (b[j + 1] - b[j]|**2
-    t = vCalcT(np.array(m))
-    return np.sum(vGetDiff(t, m)) / a.shape[0]
+    t = v_calc_t(np.array(m))
+    return np.sum(v_get_diff(t, m)) / a.shape[0]
 
 
-def arcDistanceFast(a, b):
+def arc_distance_fast(a, b):
     return (
-        minimum_distance(a, b) +
-        minimum_distance(b, a)
+        minimum_distance(a, b) + minimum_distance(b, a)
     )
 
 
-def calculateDistanceMatrix(cls):
+def calculate_distance_matrix(cls):
     distances = np.zeros((len(cls), len(cls)))
     for i in range(len(cls)):
         for j in range(i + 1, len(cls)):
-            distances[i, j] = arcDistanceFast(cls[i], cls[j])
+            distances[i, j] = arc_distance_fast(cls[i], cls[j])
     distances += np.transpose(distances)
     return distances
