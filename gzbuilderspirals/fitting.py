@@ -4,6 +4,7 @@ from sklearn.linear_model import BayesianRidge, ARDRegression
 from sklearn.preprocessing import StandardScaler, PolynomialFeatures
 from sklearn.compose import TransformedTargetRegressor
 from sklearn.pipeline import make_pipeline
+from sklearn.metrics import median_absolute_error
 from gzbuilderspirals import r_theta_from_xy, xy_from_r_theta
 
 # obtained by fitting a semi-truncated Gamma distribution to spiral arm width
@@ -230,36 +231,41 @@ def weighted_group_cross_val(pipeline, X, y, cv, groups, weights):
         group_weights = weights[train] / weights[train].mean()
         pipeline.fit(X_train, y_train,
                      bayesianridge__sample_weight=group_weights)
-
-        scores[i] = pipeline.score(
+        # scores[i] = pipeline.score(
+        #     X_test,
+        #     y_test,
+        #     sample_weight=weights[test]
+        # )
+        y_pred = pipeline.predict(
             X_test,
-            y_test,
-            sample_weight=weights[test]
         )
+        scores[i] = -median_absolute_error(y_pred, y_test)
     return scores
 
 
-# def get_log_spiral_pipeline():
-#     return make_pipeline(
-#         StandardScaler(),
-#         PolynomialFeatures(
-#             degree=1,
-#             include_bias=False,
-#         ),
-#         TransformedTargetRegressor(
-#             regressor=BayesianRidge(
-#                 compute_score=True,
-#                 fit_intercept=True,
-#                 copy_X=True,
-#                 normalize=True,
-#                 **clf_kwargs
-#             ),
-#             func=np.log,
-#             inverse_func=np.exp
-#         )
-#     )
+# pipeline to fit r = a * exp(b * theta)
+def get_log_spiral_pipeline():
+    return make_pipeline(
+        StandardScaler(),
+        PolynomialFeatures(
+            degree=1,
+            include_bias=False,
+        ),
+        TransformedTargetRegressor(
+            regressor=BayesianRidge(
+                compute_score=True,
+                fit_intercept=True,
+                copy_X=True,
+                normalize=True,
+                **clf_kwargs
+            ),
+            func=np.log,
+            inverse_func=np.exp
+        )
+    )
 
 
+# pipeline to fit y = \sum_{i=1}^{degree} c_i * x^i
 def get_polynomial_pipeline(degree):
     return make_pipeline(
         StandardScaler(),

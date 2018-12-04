@@ -1,6 +1,7 @@
 import numpy as np
 from astropy.wcs import WCS
 from skimage.transform import rotate, rescale
+from skimage.util import crop
 
 
 def get_fits_name(galaxy):
@@ -92,23 +93,35 @@ def get_angle(gal, fits_name, image_size=np.array([512, 512])):
     return rotation_angle
 
 
-def deproject_array(array, angle=0, ba=1):
-    rotated_image = rotate(array, angle)
-    stretched_image = rescale(rotated_image, (1, 1 / ba))
-    n = int((stretched_image.shape[1] - array.shape[1]) / 2)
+def deproject_array(arr, angle=0, ba=1):
+    ba = min(ba, 1/ba)
+    rotated_image = rotate(arr, angle)
+    stretched_image = rescale(
+        rotated_image,
+        (1/ba, 1),
+        mode='constant',
+        anti_aliasing=True,
+        multichannel=False
+    )
+    crop_amounts = np.repeat(
+        np.subtract(stretched_image.shape, arr.shape),
+        2
+    ).reshape(2, 2) / 2
 
-    if n > 0:
-        deprojected_image = stretched_image[:, n:-n]
-    else:
-        deprojected_image = stretched_image.copy()
-    return deprojected_image
+    return crop(stretched_image, crop_amounts)
 
 
-def deproject_arm(phi, ba, arm):
-    p = np.deg2rad(phi)
-    xs = 1 * (arm[:, 0] * np.cos(p) - arm[:, 1] * np.sin(p))
-    ys = (1 / ba) * (arm[:, 0] * np.sin(p) + arm[:, 1] * np.cos(p))
-    return np.stack((xs, ys), axis=1)
+def deproject_arm(arm, angle=0, ba=1):
+    """Given an array of xy pairs, an axis ratio, and a rotation angle, rotate
+    the points about the origin and scale outwards along the y axis
+    """
+    p = np.deg2rad(-angle)
+    rotation_matrix = np.array(
+        ((np.cos(p), -np.sin(p)), (np.sin(p), np.cos(p)))
+    )
+    rotated_arm = np.dot(rotation_matrix, arm.T)
+    stretched_arm = rotated_arm.T * (1, 1/ba)
+    return stretched_arm
 
 
 def reproject_arm(phi, ba, arm):

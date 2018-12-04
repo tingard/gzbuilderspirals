@@ -81,7 +81,7 @@ def weight_r_by_n_arms(R, groups):
         n = sum(
             1
             for r in radiuses
-            if np.any(r > r_bins[i]) and np.any(r < r_bins[i+1])
+            if np.any(r >= r_bins[i]) and np.any(r <= r_bins[i+1])
         )
         counts[i] = max(0, n)
     return interp1d(r_bins, counts/sum(counts))
@@ -90,6 +90,6 @@ def weight_r_by_n_arms(R, groups):
 def get_sample_weight(R, groups):
     w = np.ones(R.shape[0])
     w *= R**2
-    # w *= weight_r_by_n_arms(R, groups)(R)
+    w *= weight_r_by_n_arms(R, groups)(R)
     w /= np.average(w)
     return w
