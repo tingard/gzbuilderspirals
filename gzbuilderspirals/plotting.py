@@ -109,26 +109,26 @@ def plot_clustered_points(drawn_arms, labels, image_arr=None, **kwargs):
     return dict(bbox_inches='tight', pad_inches=0)
 
 
-@FigureWrapper
-def make_cleaning_plot(R, t, mask, **kwargs):
-    plt.xlabel('Distance from center')
-    plt.ylabel(r'$\theta$ (unwrapped)')
-    plt.plot(R[~mask], t[~mask], 'r.', label='Points removed',
-             markersize=4, alpha=0.5)
-    plt.plot(R[mask], t[mask], '.', label='Points kept',
-             markersize=4, alpha=0.5)
-    plt.legend()
+# @FigureWrapper
+# def make_cleaning_plot(R, t, mask, **kwargs):
+#     plt.xlabel(r'$\theta$ (unwrapped)')
+#     plt.ylabel('Distance from center')
+#     plt.plot(t[~mask], R[~mask], 'r.', label='Points removed',
+#              markersize=4, alpha=0.5)
+#     plt.plot(t[mask], R[mask], '.', label='Points kept',
+#              markersize=4, alpha=0.5)
+#     plt.legend()
 
 
 @FigureWrapper
-def make_polar_cleaning_plot(R, t, mask, projection=None, **kwargs):
+def make_cleaning_plot(R, t, mask, projection=None, **kwargs):
     plt.plot(t[~mask], R[~mask], 'r.', label='Points removed',
              markersize=4, alpha=0.5)
     plt.plot(t[mask], R[mask], '.', label='Points kept',
              markersize=4, alpha=0.5)
     if projection != 'polar':
-        plt.xlabel('Distance from center')
-        plt.ylabel(r'$\theta$ (unwrapped)')
+        plt.xlabel(r'$\theta$ (unwrapped)')
+        plt.ylabel('Distance from center')
     plt.legend()
 
 
@@ -141,14 +141,11 @@ def make_point_weight_plot(R, weights, **kwargs):
 
 
 @FigureWrapper
-def make_fit_plot(R, t, R_predict, fits, projection=None, **kwargs):
-    x, y = (t, R) if projection == 'polar' else (R, t)
+def make_fit_plot(R, t, t_predict, fits, projection=None, **kwargs):
+    x, y = (t, R)  # if projection == 'polar' else (R, t)
     plt.plot(x, y, '.', markersize=3, alpha=0.4)
-    for name, t_fit in fits:
-        if projection == 'polar':
-            x, y = t_fit, R_predict
-        else:
-            x, y = R_predict, t_fit
+    for name, R_fit in fits:
+        x, y = t_predict, R_fit
         plt.plot(x, y, label=name)
     if projection != 'polar':
         plt.xlabel('Distance from center')
@@ -184,7 +181,7 @@ def make_pipeline_plots(
             outfile='{}/image_deprojection'.format(file_loc),
             figsize=(16, 9)
         )
-    gen = pipeline._pipeline_iterator(*args, **kwargs)
+    gen = pipeline._pipeline_iterator2(*args, **kwargs)
     v = verbose
     plot_drawn_arms(args[0], outfile='{}/drawn_arms'.format(file_loc),
                     image_arr=image_arr)
@@ -208,9 +205,6 @@ def make_pipeline_plots(
         make_cleaning_plot.add(
             R_all, t_all_unwrapped, outlier_mask
         )
-        make_polar_cleaning_plot.add(
-            R_all, t_all_unwrapped, outlier_mask
-        )
         _vprint(v, '\t3 - calculating weights')
         point_weights = next(gen)
         make_point_weight_plot.add(R, point_weights)
@@ -219,40 +213,44 @@ def make_pipeline_plots(
         out.append(out_)
 
         # Calculate the models for plotting
-        R_predict = np.linspace(min(R), max(R), 300)
-        logsp_model = fitting.get_polynomial_pipeline(1)
-        logsp_model.fit(np.log(R).reshape(-1, 1), t,
+        t_predict = np.linspace(min(t), max(t), 300)
+        logsp_model = fitting.get_log_spiral_pipeline()
+        logsp_model.fit(t.reshape(-1, 1), R,
                         bayesianridge__sample_weight=point_weights)
+        # logsp_model = fitting.get_polynomial_pipeline(1)
+        # logsp_model.fit(np.log(R).reshape(-1, 1), t,
+        #                 bayesianridge__sample_weight=point_weights)
 
         fits = [(
             'log_spiral',
-            logsp_model.predict(np.log(R_predict.reshape(-1, 1)))
+            logsp_model.predict(t_predict.reshape(-1, 1))
         )]
 
         for degree in range(1, 6):
             poly_model = fitting.get_polynomial_pipeline(degree)
-            poly_model.fit(R.reshape(-1, 1), t,
+            poly_model.fit(t.reshape(-1, 1), R,
                            bayesianridge__sample_weight=point_weights)
             fits += [(
                 'Polynomial (degree {})'.format(degree),
-                poly_model.predict(R_predict.reshape(-1, 1))
+                poly_model.predict(t_predict.reshape(-1, 1))
             )]
 
-        make_fit_plot.add(R, t, R_predict, fits)
+        make_fit_plot.add(R, t, t_predict, fits)
         out.append(out_)
         make_fit_comparison_plot.add(out_)
 
     # plot all the cached data
     try:
-        make_cleaning_plot(outfile='{}/cleaning'.format(file_loc), clear=True)
+        make_cleaning_plot(outfile='{}/cleaning'.format(file_loc), clear=False)
         plt.close()
-        make_polar_cleaning_plot(outfile='{}/cleaning_polar'.format(file_loc),
-                                 projection='polar', clear=True)
+        make_cleaning_plot(outfile='{}/cleaning_polar'.format(file_loc),
+                           projection='polar', clear=True)
         plt.close()
         make_point_weight_plot(outfile='{}/point_weights'.format(file_loc),
                                clear=True)
         plt.close()
         make_fit_plot(outfile='{}/fits'.format(file_loc), clear=False)
+        plt.close()
         make_fit_plot(outfile='{}/polar_fits'.format(file_loc),
                       projection='polar', clear=True)
         plt.close()
