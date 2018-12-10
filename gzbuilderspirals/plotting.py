@@ -129,6 +129,9 @@ def make_cleaning_plot(R, t, mask, projection=None, **kwargs):
     if projection != 'polar':
         plt.xlabel(r'$\theta$ (unwrapped)')
         plt.ylabel('Distance from center')
+    else:
+        plt.ylim(0, max(R))
+
     plt.legend()
 
 
@@ -148,8 +151,11 @@ def make_fit_plot(R, t, t_predict, fits, projection=None, **kwargs):
         x, y = t_predict, R_fit
         plt.plot(x, y, label=name)
     if projection != 'polar':
-        plt.xlabel('Distance from center')
-        plt.ylabel(r'$\theta$ (unwrapped)')
+        plt.xlabel(r'$\theta$ (unwrapped)')
+        plt.ylabel('Distance from center')
+    else:
+        plt.ylim(0, max(R))
+
     plt.legend()
 
 
