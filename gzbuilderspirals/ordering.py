@@ -60,6 +60,7 @@ def get_diff2(t, a):
 
 
 v_get_diff2 = np.vectorize(get_diff2, signature='(a),(a,b,c)->(a)')
+
 v_sign = np.vectorize(sign, signature='(a,b,c)->(a)')
 
 

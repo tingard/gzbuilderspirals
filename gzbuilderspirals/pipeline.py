@@ -1,7 +1,7 @@
 import numpy as np
 from sklearn.model_selection import GroupKFold
 from . import metric, clustering, cleaning, deprojecting, fitting
-from . import r_theta_from_xy, get_sample_weight, equalize_arm_length, _vprint
+from . import xy_from_r_theta, r_theta_from_xy, get_sample_weight, equalize_arm_length, _vprint
 
 
 def usage():
@@ -14,22 +14,18 @@ def usage():
     print('verbose: whether to print logging information to the screen')
 
 
-def _pipeline_iterator(
+def _log_spiral_pipeline_iterator(
     drawn_arms, image_size=512, phi=0, ba=1, distances=None,
-    clean_points=False,
+    clean_points=False
 ):
-    """Iterator to cycle through pipeline steps
-    """
     drawn_arms = np.array(equalize_arm_length(np.array(drawn_arms)))
-    yield drawn_arms  # Yield the equalised drawn arms
     if distances is None:
         distances = metric.calculate_distance_matrix(drawn_arms)
-    # Yield the calculated distance matrix
-    yield distances
     db = clustering.cluster_arms(distances)
-    # Yield the labels of clustered arms
     yield db.labels_
-    out = []
+    cleaned_points = []
+    predicted_arms = []
+    logsp_model = fitting.get_log_spiral_pipeline()
     for i in range(np.max(db.labels_) + 1):
         arms = drawn_arms[db.labels_ == i]
         coords, groups_all = cleaning.get_grouped_data(arms)
@@ -37,8 +33,6 @@ def _pipeline_iterator(
             coords / image_size - 0.5,
             angle=phi, ba=ba,
         )
-        # Yield the deprojected coordinates
-        yield deprojected_coords
         R_all, t_all = r_theta_from_xy(*deprojected_coords.T)
         t_all_unwrapped = fitting.unwrap(t_all, groups_all)
         if clean_points:
@@ -48,42 +42,38 @@ def _pipeline_iterator(
             )
         else:
             outlier_mask = np.ones(R_all.shape[0], dtype=bool)
-        # Yield the outlier mask
-        yield R_all, t_all_unwrapped, outlier_mask
         groups = groups_all[outlier_mask]
-        R = R_all[outlier_mask].reshape(-1, 1)
+        R = R_all[outlier_mask]
         t = t_all_unwrapped[outlier_mask]
-        point_weights = get_sample_weight(R.reshape(-1), groups)
-        # Yield the point weights
-        yield point_weights
-        gkf = GroupKFold(n_splits=min(5, len(np.unique(groups))))
-        logsp_model = fitting.get_polynomial_pipeline(1)
-        out_ = {}
-        s = fitting.weighted_group_cross_val(
-            logsp_model,
-            np.log(R), t,
-            cv=gkf,
-            groups=groups,
-            weights=point_weights
+        cleaned_points.append(coords[outlier_mask])
+        point_weights = get_sample_weight(R, groups)
+        logsp_model.fit(t.reshape(-1, 1), R, bayesianridge__sample_weight=point_weights)
+
+        t_predict = np.linspace(min(t), max(t), 500)
+        R_predict = logsp_model.predict(t_predict.reshape(-1, 1))
+        predicted_arms.append(
+            (get_reprojected_arm(t_predict, R_predict, phi, ba) + 0.5) * image_size
         )
-        out_['Log spiral'] = s
-        for degree in range(1, 6):
-            poly_model = fitting.get_polynomial_pipeline(degree)
-            s = fitting.weighted_group_cross_val(
-                poly_model,
-                R, t,
-                cv=gkf,
-                groups=groups,
-                weights=point_weights
-            )
-            out_['poly_spiral_{}'.format(degree)] = s
-        # Yield the arm result
-        yield out_
-        out.append(out_)
-    # yield out
+    yield cleaned_points
+    yield predicted_arms
 
 
-def _pipeline_iterator2(
+def get_log_spirals(*args, **kwargs):
+    iterator = _log_spiral_pipeline_iterator(*args, **kwargs)
+    for res in iterator:
+        pass
+    return res
+
+
+def get_reprojected_arm(theta, r, phi, ba):
+    return deprojecting.reproject_arm(
+        arm=np.stack(xy_from_r_theta(r, theta), axis=1),
+        angle=phi,
+        ba=ba
+    )
+
+
+def _model_selection_pipeline_iterator(
     drawn_arms, image_size=512, phi=0, ba=1, distances=None,
     clean_points=False,
 ):
@@ -153,7 +143,7 @@ def _pipeline_iterator2(
 
 
 def model_selection_pipeline(*args, verbose=False, **kwargs):
-    gen = _pipeline_iterator(*args, **kwargs)
+    gen = _model_selection_pipeline_iterator(*args, **kwargs)
     v = verbose
     _vprint(v, '1 - equalising arm length')
     drawn_arms = next(gen)
@@ -177,6 +167,6 @@ def model_selection_pipeline(*args, verbose=False, **kwargs):
 
 
 def msp(*args, **kwargs):
-    for out in _pipeline_iterator(*args, **kwargs):
+    for out in _model_selection_pipeline_iterator(*args, **kwargs):
         pass
     return out

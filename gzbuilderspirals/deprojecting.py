@@ -79,7 +79,7 @@ def get_angle(gal, fits_name, image_size=np.array([512, 512])):
     wFits.wcs.crpix = image_size
 
     r = 4 * float(gal['PETRO_THETA']) / 3600
-    phi = float(gal['SERSIC_PHI'])
+    phi = float(gal['PETRO_PHI90'])
 
     center_pix, dec_line = np.array(wFits.all_world2pix(
         [gal['RA'].iloc[0], gal['RA'].iloc[0]],
@@ -124,8 +124,8 @@ def deproject_arm(arm, angle=0, ba=1):
     return stretched_arm
 
 
-def reproject_arm(phi, ba, arm):
+def reproject_arm(arm, angle=0, ba=1):
     return deproject_arm(
-        -phi, 1,
-        deproject_arm(0, 1/ba, arm)
+        deproject_arm(arm, 0, 1/ba),
+        -angle, 1
     )

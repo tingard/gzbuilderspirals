@@ -37,7 +37,7 @@ true = True
 false = False
 
 
-def get_drawn_arms(id, classifications):
+def get_drawn_arms(id, classifications, clean=True):
     annotations_for_subject = [
         eval(foo) for foo in
         classifications[classifications['subject_ids'] == id]['annotations']
@@ -50,7 +50,7 @@ def get_drawn_arms(id, classifications):
         ]
     except IndexError as e:
         print('{} raised {}'.format(id, e))
-        assert False
+        raise(e)
     spirals = [[a['points'] for a in c] for c in annotations_with_spiral]
     spirals_with_length_cut = [
         [[[p['x'], p['y']] for p in a] for a in c]
@@ -59,7 +59,7 @@ def get_drawn_arms(id, classifications):
     drawn_arms = np.array([
         np.array(arm) for classification in spirals_with_length_cut
         for arm in classification
-        if LineString(arm).is_simple
+        if not clean or LineString(arm).is_simple
     ])
     return drawn_arms
 
