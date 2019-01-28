@@ -13,6 +13,63 @@ def usage():
     print('ba: the galaxy\'s axis ratio')
     print('verbose: whether to print logging information to the screen')
 
+# class Pipeline():
+#     def __init__(self, drawn_arms, **kwargs):
+#         self.drawn_arms = np.array(equalize_arm_length(np.array(drawn_arms)))
+#         self.image_size = kwargs.get(image_size, 512)
+#         self.phi = kwargs.get(phi, 0.0)
+#         self.ba = kwargs.get(ba, 1.0)
+#         if kwargs.get(distances, None) is None:
+#             self.distances = metric.calculate_distance_matrix(self.drawn_arms)
+#         else:
+#             self.distances = kwargs['distances']
+#         self.clean_points = kwargs.get(clean_points, False)
+#         self.db = clustering.cluster_arms(distances)
+#         cleaned_points = []
+#         predicted_arms = []
+#         self.logsp_model = fitting.get_log_spiral_pipeline()
+#
+#     def get_log_spiral(arm_label, reproject=True):
+#         arms = self.drawn_arms[self.db.labels_ == arm_label]
+#         coords, groups_all = cleaning.get_grouped_data(arms)
+#         deprojected_coords = deprojecting.deproject_arm(
+#             coords / image_size - 0.5,
+#             angle=self.phi, ba=self.ba,
+#         )
+#         R_all, t_all = r_theta_from_xy(*deprojected_coords.T)
+#         t_all_unwrapped = fitting.unwrap(t_all, groups_all)
+#         if clean_points:
+#             outlier_mask = cleaning.clean_arms_polar(
+#                 R_all, t_all_unwrapped,
+#                 groups_all
+#             )
+#         else:
+#             outlier_mask = np.ones(R_all.shape[0], dtype=bool)
+#         groups = groups_all[outlier_mask]
+#         R = R_all[outlier_mask]
+#         t = t_all_unwrapped[outlier_mask]
+#         point_weights = get_sample_weight(R, groups)
+#         logsp_model.fit(t.reshape(-1, 1), R, bayesianridge__sample_weight=point_weights)
+#
+#         t_predict = np.linspace(min(t), max(t), 500)
+#         R_predict = logsp_model.predict(t_predict.reshape(-1, 1))
+#
+#         x, y = xy_from_r_theta(R_predict, t_predict)
+#         length = np.sum(np.sqrt((x[1:] - x[:-1])**2 + (y[1:] - y[:-1])**2))
+#
+#         if reproject:
+#             predicted_arm = get_reprojected_arm(t_predict, R_predict, phi, ba) + 0.5) * image_size
+#         else:
+#             predicted_arm = np.stack((x, y), axis=1)
+#
+#         coef = logsp_model.named_steps['bayesianridge'].regressor_.coef_
+#         sigma = logsp_model.named_steps['bayesianridge'].regressor_.sigma_
+#         pa, sigma_pa = get_pitch_angle(coef[0], sigma[0, 0])
+#         x, y = xy_from_r_theta(R_predict, t_predict)
+#         length = np.sum(np.sqrt((x[1:] - x[:-1])**2 + (y[1:] - y[:-1])**2))
+#
+#         return { 'arm': predicted_arm, 'length': length, 'pa': pa, 'sigma_pa': sigma_pa }
+
 
 def _log_spiral_pipeline_iterator(
     drawn_arms, image_size=512, phi=0, ba=1, distances=None,
@@ -71,6 +128,65 @@ def get_reprojected_arm(theta, r, phi, ba):
         angle=phi,
         ba=ba
     )
+
+
+def get_pitch_angle(b, sigma_b):
+    pa = 90 - np.rad2deg(np.arctan(np.abs(1/b)))
+    sigma_pa = np.rad2deg(np.sqrt(sigma_b**2 / (b**2 + 1)**2))
+    return (pa, sigma_pa)
+
+
+def pitch_angle_pipeline(
+    drawn_arms, image_size=512, phi=0, ba=1, distances=None,
+    clean_points=False
+):
+    # calculate length-weighted pitch angle of the log spiral fit to a galaxy
+    drawn_arms = np.array(equalize_arm_length(np.array(drawn_arms)))
+    if distances is None:
+        distances = metric.calculate_distance_matrix(drawn_arms)
+    db = clustering.cluster_arms(distances)
+    logsp_model = fitting.get_log_spiral_pipeline()
+
+    pa = np.zeros(np.max(db.labels_)+1)
+    sigma_pa = np.zeros(pa.shape)
+    length = np.zeros(pa.shape)
+    for i in range(np.max(db.labels_) + 1):
+        arms = drawn_arms[db.labels_ == i]
+        coords, groups_all = cleaning.get_grouped_data(arms)
+        deprojected_coords = deprojecting.deproject_arm(
+            coords / image_size - 0.5,
+            angle=phi, ba=ba,
+        )
+        R_all, t_all = r_theta_from_xy(*deprojected_coords.T)
+        t_all_unwrapped = fitting.unwrap(t_all, groups_all)
+        if clean_points:
+            outlier_mask = cleaning.clean_arms_polar(
+                R_all, t_all_unwrapped,
+                groups_all
+            )
+        else:
+            outlier_mask = np.ones(R_all.shape[0], dtype=bool)
+        groups = groups_all[outlier_mask]
+        R = R_all[outlier_mask]
+        t = t_all_unwrapped[outlier_mask]
+        cleaned_points.append(coords[outlier_mask])
+        point_weights = get_sample_weight(R, groups)
+        logsp_model.fit(t.reshape(-1, 1), R, bayesianridge__sample_weight=point_weights)
+        coef = logsp_model.named_steps['bayesianridge'].regressor_.coef_
+        sigma = logsp_model.named_steps['bayesianridge'].regressor_.sigma_
+        arm_pa, arm_sigma_pa = get_pitch_angle(coef[0], sigma[0, 0])
+        pa[i] = arm_pa
+        sigma_pa[i] = arm_sigma_pa
+
+        t_predict = np.linspace(min(t), max(t), 500)
+        R_predict = logsp_model.predict(t_predict.reshape(-1, 1))
+        x, y = xy_from_r_theta(R_predict, t_predict)
+        length[i] = np.sum(np.sqrt((x[1:] - x[:-1])**2 + (y[1:] - y[:-1])**2))
+    if length.sum() == 0:
+        return np.nan, np.nan, np.stack((pa, sigma_pa, length), axis=1)
+    combined_pa = np.sum(pa * length) / length.sum()
+    combined_sigma_pa = np.sqrt(np.sum(length**2 * sigma_pa**2)) / length.sum()
+    return combined_pa, combined_sigma_pa, np.stack((pa, sigma_pa, length), axis=1)
 
 
 def _model_selection_pipeline_iterator(

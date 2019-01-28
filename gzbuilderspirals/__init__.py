@@ -1,6 +1,7 @@
 import numpy as np
 from shapely.geometry import LineString
 from scipy.interpolate import splprep, splev, interp1d
+import json
 
 
 def r_theta_from_xy(x, y, mux=0, muy=0):
@@ -12,14 +13,6 @@ def r_theta_from_xy(x, y, mux=0, muy=0):
 
 def xy_from_r_theta(r, theta, mux=0, muy=0):
     return mux + r * np.cos(theta), muy + r * np.sin(theta)
-
-
-wrap_color = lambda color, s: '{}{}\033[0m'.format(color, s)
-red = lambda s: wrap_color('\033[31m', s)
-green = lambda s: wrap_color('\033[32m', s)
-yellow = lambda s: wrap_color('\033[33m', s)
-blue = lambda s: wrap_color('\033[34m', s)
-purple = lambda s: wrap_color('\033[35m', s)
 
 
 def log(s, flag=True):
@@ -39,8 +32,8 @@ false = False
 
 def get_drawn_arms(id, classifications, clean=True):
     annotations_for_subject = [
-        eval(foo) for foo in
-        classifications[classifications['subject_ids'] == id]['annotations']
+        json.loads(i) for i in
+        classifications['annotations'][classifications['subject_ids'] == id]
     ]
     try:
         annotations_with_spiral = [

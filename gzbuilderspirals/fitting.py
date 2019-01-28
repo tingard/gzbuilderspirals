@@ -110,11 +110,11 @@ def weighted_group_cross_val(pipeline, X, y, cv, groups, weights):
 
 
 # pipeline to fit Y = a * exp(b * X), don't bother with bias as logsp is self-
-# similar
+# similar. Also not scaling numbers as it makes it trickier to recover fitting
+# parameters
 def get_log_spiral_pipeline():
-    names = ('standardscaler', 'polynomialfeatures', 'bayesianridge')
+    names = ('polynomialfeatures', 'bayesianridge')
     steps = [
-        StandardScaler(),
         PolynomialFeatures(
             degree=1,
             include_bias=False,
@@ -137,7 +137,6 @@ def get_log_spiral_pipeline():
 # pipeline to fit y = \sum_{i=1}^{degree} c_i * X^i
 def get_polynomial_pipeline(degree):
     return make_pipeline(
-        StandardScaler(),
         PolynomialFeatures(
             degree=degree,
             include_bias=False,

@@ -187,7 +187,7 @@ def make_pipeline_plots(
             outfile='{}/image_deprojection'.format(file_loc),
             figsize=(16, 9)
         )
-    gen = pipeline._pipeline_iterator2(*args, **kwargs)
+    gen = pipeline._model_selection_pipeline_iterator(*args, **kwargs)
     v = verbose
     plot_drawn_arms(args[0], outfile='{}/drawn_arms'.format(file_loc),
                     image_arr=image_arr)
