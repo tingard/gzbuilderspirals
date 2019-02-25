@@ -31,29 +31,48 @@ false = False
 
 
 def get_drawn_arms(id, classifications, clean=True):
-    annotations_for_subject = [
-        json.loads(i) for i in
-        classifications['annotations'][classifications['subject_ids'] == id]
-    ]
-    try:
-        annotations_with_spiral = [
-            c[3]['value'][0]['value']
-            for c in annotations_for_subject
-            if len(c) > 3 and len(c[3]['value'][0]['value'])
-        ]
-    except IndexError as e:
-        print('{} raised {}'.format(id, e))
-        raise(e)
-    spirals = [[a['points'] for a in c] for c in annotations_with_spiral]
-    spirals_with_length_cut = [
+    # classifications must be a pandas DataFrame from zoo csv export
+    annotations_for_subject = map(
+        json.loads,
+        classifications['annotations'][classifications['subject_ids'] == id].values
+    )
+    spirals = (
+        [a['points'] for a in c[3]['value'][0]['value']]
+        for c in annotations_for_subject
+        if len(c) > 3 and len(c[3]['value'][0]['value'])
+    )
+    spirals_with_length_cut = (
         [[[p['x'], p['y']] for p in a] for a in c]
         for c in spirals if all([len(a) > 5 for a in c])
-    ]
+    )
     drawn_arms = np.array([
         np.array(arm) for classification in spirals_with_length_cut
         for arm in classification
         if not clean or LineString(arm).is_simple
     ])
+    # annotations_for_subject = [
+    #     json.loads(i) for i in
+    #     classifications['annotations'][classifications['subject_ids'] == id]
+    # ]
+    # try:
+    #     annotations_with_spiral = [
+    #         c[3]['value'][0]['value']
+    #         for c in annotations_for_subject
+    #         if len(c) > 3 and len(c[3]['value'][0]['value'])
+    #     ]
+    # except IndexError as e:
+    #     print('{} raised {}'.format(id, e))
+    #     raise(e)
+    # spirals = [[a['points'] for a in c] for c in annotations_with_spiral]
+    # spirals_with_length_cut = [
+    #     [[[p['x'], p['y']] for p in a] for a in c]
+    #     for c in spirals if all([len(a) > 5 for a in c])
+    # ]
+    # drawn_arms = np.array([
+    #     np.array(arm) for classification in spirals_with_length_cut
+    #     for arm in classification
+    #     if not clean or LineString(arm).is_simple
+    # ])
     return drawn_arms
 
 

@@ -22,17 +22,23 @@ def clean_points(point_cloud):
 
 def clean_arms_xy(point_cloud, groups):
     s = StandardScaler()
-    clf = LocalOutlierFactor(contamination='auto', n_jobs=-1, n_neighbors=40,
+    clf = LocalOutlierFactor(contamination='auto', n_jobs=-1, n_neighbors=20,
                              novelty=True)
     s.fit(point_cloud)
-    X_normed, Y_normed = s.predict(point_cloud)
+    X_normed, Y_normed = s.transform(point_cloud).T
+    standardized_cloud = np.stack((X_normed, Y_normed), axis=1)
     res = np.ones(point_cloud.shape[0]).astype(bool)
+    # for each drawn arm in this cluster
     for group in np.unique(groups):
-        testField = groups != group
-        X_train = point_cloud[testField]
-        X_test = point_cloud[~testField]
+        # get a mask for all points in this arm
+        testField = groups == group
+        # train on all the other arms present
+        X_train = standardized_cloud[~testField]
+        # test on current arm
+        X_test = standardized_cloud[testField]
         clf.fit(X_train)
-        res[~testField] = clf.predict(X_test) > 0
+        # save whether each point in the arm is an outlier
+        res[testField] = clf.predict(X_test) > 0
     return res
 
 

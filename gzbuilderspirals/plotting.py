@@ -6,7 +6,7 @@ from matplotlib.patches import Ellipse
 from PIL import Image
 from PIL import ImageFont
 from PIL import ImageDraw
-from . import fitting, pipeline
+from . import fitting, pipeline, oo, metric
 from . import _vprint
 
 _imshow_kwargs = dict(origin='lower', cmap='gray_r')
@@ -109,17 +109,6 @@ def plot_clustered_points(drawn_arms, labels, image_arr=None, **kwargs):
     return dict(bbox_inches='tight', pad_inches=0)
 
 
-# @FigureWrapper
-# def make_cleaning_plot(R, t, mask, **kwargs):
-#     plt.xlabel(r'$\theta$ (unwrapped)')
-#     plt.ylabel('Distance from center')
-#     plt.plot(t[~mask], R[~mask], 'r.', label='Points removed',
-#              markersize=4, alpha=0.5)
-#     plt.plot(t[mask], R[mask], '.', label='Points kept',
-#              markersize=4, alpha=0.5)
-#     plt.legend()
-
-
 @FigureWrapper
 def make_cleaning_plot(R, t, mask, projection=None, **kwargs):
     plt.plot(t[~mask], R[~mask], 'r.', label='Points removed',
@@ -144,12 +133,11 @@ def make_point_weight_plot(R, weights, **kwargs):
 
 
 @FigureWrapper
-def make_fit_plot(R, t, t_predict, fits, projection=None, **kwargs):
+def make_fit_plot(R, t, fits, projection=None, **kwargs):
     x, y = (t, R)  # if projection == 'polar' else (R, t)
     plt.plot(x, y, '.', markersize=3, alpha=0.4)
-    for name, R_fit in fits:
-        x, y = t_predict, R_fit
-        plt.plot(x, y, label=name)
+    for name, fit in fits:
+        plt.plot(*fit.T, label=name)
     if projection != 'polar':
         plt.xlabel(r'$\theta$ (unwrapped)')
         plt.ylabel('Distance from center')
@@ -175,11 +163,19 @@ def make_fit_comparison_plot(data, **kwargs):
     plt.gcf().subplots_adjust(bottom=0.4)
 
 
-def make_pipeline_plots(
-    *args,
-    image_arr=None, file_loc=None, deprojected_array=None, verbose=False,
-    **kwargs
-):
+def make_pipeline_plots(drawn_arms, *args, phi=0, ba=1, image_size=512,
+                        distances=None, clean_points=False,
+                        image_arr=None, deprojected_array=None, file_loc=None,
+                        verbose=False, **kwargs):
+    if distances is None:
+        distances = metric.calculate_distance_matrix(drawn_arms)
+    p = oo.Pipeline(drawn_arms, phi=phi, ba=ba, image_size=image_size,
+                 distances=distances)
+    arms = [
+        p.get_arm(i, clean_points=clean_points)
+        for i in range(max(p.db.labels_) + 1)
+    ]
+
     if image_arr is not None and deprojected_array is not None:
         plot_deprojected_array(
             image_arr, deprojected_array,
@@ -187,63 +183,26 @@ def make_pipeline_plots(
             outfile='{}/image_deprojection'.format(file_loc),
             figsize=(16, 9)
         )
-    gen = pipeline._model_selection_pipeline_iterator(*args, **kwargs)
-    v = verbose
-    plot_drawn_arms(args[0], outfile='{}/drawn_arms'.format(file_loc),
+    plot_drawn_arms(drawn_arms, outfile='{}/drawn_arms'.format(file_loc),
                     image_arr=image_arr)
-    _vprint(v, '1 - equalising arm length')
-    drawn_arms = next(gen)
-    _vprint(v, '2 - calculating distance matrix')
-    distances = next(gen)
-    _vprint(v, '3 - clustering arms')
-    labels = next(gen)
-    plot_clustered_points(drawn_arms, labels,
+    plot_clustered_points(drawn_arms, p.db.labels_,
                           outfile='{}/arm_clusters'.format(file_loc),
                           image_arr=image_arr)
-    out = []
-    for i in range(np.max(labels) + 1):
-        _vprint(v, 'Arm', i)
-        _vprint(v, '\t1 - deprojecting arm')
-        deprojected_coords = next(gen)
-        _vprint(v, '\t2 - cleaning points')
-        R_all, t_all_unwrapped, outlier_mask = next(gen)
-        R, t = R_all[outlier_mask], t_all_unwrapped[outlier_mask]
+    for arm in arms:
         make_cleaning_plot.add(
-            R_all, t_all_unwrapped, outlier_mask
+            arm.R_all, arm.t_all_unwrapped, arm.outlier_mask
         )
-        _vprint(v, '\t3 - calculating weights')
-        point_weights = next(gen)
-        make_point_weight_plot.add(R, point_weights)
-        _vprint(v, '\t4 - performing group cross-validation')
-        out_ = next(gen)
-        out.append(out_)
+        make_point_weight_plot.add(arm.R, arm.point_weights)
 
         # Calculate the models for plotting
-        t_predict = np.linspace(min(t), max(t), 300)
-        logsp_model = fitting.get_log_spiral_pipeline()
-        logsp_model.fit(t.reshape(-1, 1), R,
-                        bayesianridge__sample_weight=point_weights)
-        # logsp_model = fitting.get_polynomial_pipeline(1)
-        # logsp_model.fit(np.log(R).reshape(-1, 1), t,
-        #                 bayesianridge__sample_weight=point_weights)
+        models, scores = arm.fit_polynomials()
+        fits = [
+            ('Polynomial (degree {})'.format(i), models['poly_spiral_{}'.format(i)])
+            for i in range(1, 6)
+        ]
 
-        fits = [(
-            'log_spiral',
-            logsp_model.predict(t_predict.reshape(-1, 1))
-        )]
-
-        for degree in range(1, 6):
-            poly_model = fitting.get_polynomial_pipeline(degree)
-            poly_model.fit(t.reshape(-1, 1), R,
-                           bayesianridge__sample_weight=point_weights)
-            fits += [(
-                'Polynomial (degree {})'.format(degree),
-                poly_model.predict(t_predict.reshape(-1, 1))
-            )]
-
-        make_fit_plot.add(R, t, t_predict, fits)
-        out.append(out_)
-        make_fit_comparison_plot.add(out_)
+        make_fit_plot.add(arm.R, arm.t, fits)
+        make_fit_comparison_plot.add(scores)
 
     # plot all the cached data
     try:
@@ -267,7 +226,6 @@ def make_pipeline_plots(
     except IndexError:
         print('No arm clusters found')
 
-    return out
 
 
 def combine_plots(plot_folder, outfile=None, title=None, im_list=[
