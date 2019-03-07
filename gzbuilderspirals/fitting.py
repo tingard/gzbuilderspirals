@@ -5,7 +5,7 @@ from sklearn.preprocessing import StandardScaler, PolynomialFeatures
 from sklearn.compose import TransformedTargetRegressor
 from sklearn.pipeline import Pipeline, make_pipeline
 from sklearn.metrics import median_absolute_error
-from gzbuilderspirals import r_theta_from_xy, xy_from_r_theta
+from gzbuilderspirals import r_theta_from_xy, xy_from_r_theta, metric
 
 # obtained by fitting a semi-truncated Gamma distribution to spiral arm width
 # slider values, after removing all values at 1 (default) and 0 and 2
@@ -51,21 +51,27 @@ def unwrap_and_sort(r, theta):
     return r_ordered, theta_ordered
 
 
-def unwrap(theta, groups):
+def unwrap(theta, r, groups):
+    out = theta[:]
+    dt = (np.arange(3) - 1) * 2 * np.pi
     t = np.array([])
-    dt = (np.arange(5) - 2) * 2 * np.pi
-    theta_mean = 0
     for i, g in enumerate(np.unique(groups)):
         t_ = np.unwrap(theta[groups == g])
-        # out of all allowed transformations, which puts the mean of the theta
-        # values closest to the mean of rest of the points (using the first arm
-        # as a template)?
         if i == 0:
-            theta_mean = np.concatenate((t, t_)).mean()
-        j = np.argmin(np.abs(t_.mean() + dt - theta_mean))
-        t_ += dt[j]
-        t = np.concatenate((t, t_))
-    return t
+            out[groups == g] = t_
+            continue
+        coords = np.stack((t_, r[groups == g]), axis=0)
+        poss = ((coords.T + (delta, 0)).T for delta in dt)
+
+        extremes = [np.argmin(out[groups < g]), np.argmax(out[groups < g])]
+        other = np.stack((
+            out[groups < g][extremes],
+            r[groups < g][extremes]
+        ), axis=0)
+
+        d = [metric.min_arc_distance_numpy([c.T, other.T]) for c in poss]
+        out[groups == g] = t_ + dt[np.argmin(d)]
+    return out
 
 
 def pitch_angle_from_xy(x, y):

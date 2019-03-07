@@ -99,9 +99,10 @@ def weight_r_by_n_arms(R, groups):
     return interp1d(r_bins, counts/sum(counts))
 
 
-def get_sample_weight(R, groups):
+def get_sample_weight(R, groups, bar_length=0):
     w = np.ones(R.shape[0])
     w *= R**2
     w *= weight_r_by_n_arms(R, groups)(R)
+    w[R < bar_length] = 0
     w /= np.average(w)
     return w
