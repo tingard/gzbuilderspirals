@@ -1,3 +1,5 @@
+import json
+import pickle
 import numpy as np
 from sklearn.model_selection import GroupKFold
 from . import metric, clustering, cleaning, deprojecting, fitting, pipeline
@@ -6,8 +8,9 @@ from . import get_sample_weight, equalize_arm_length
 
 
 class Arm():
-    def __init__(self, parent_pipeline, arms, clean_points=True,
-                 bar_length=0):
+    def __init__(self, parent_pipeline, arms, clean_points=True):
+        self.__parent_pipeline = parent_pipeline
+        self.did_clean = clean_points
         self.arms = arms
         self.phi = parent_pipeline.phi
         self.ba = parent_pipeline.ba
@@ -81,14 +84,41 @@ class Arm():
             scores['poly_spiral_{}'.format(degree)] = s
         return models, scores
 
+    def __add__ (self, other):
+        if not (self.phi == other.phi
+            and self.ba == other.ba
+            and np.all(self.image_size == other.image_size)
+        ):
+            raise ValueError(
+                'Cannot concatenate two arms with different '
+                'deprojection values'
+            )
+        grouped_drawn_arms = np.concatenate([self.arms, other.arms])
+        return Arm(self.__parent_pipeline, grouped_drawn_arms, self.did_clean)
+
+    @classmethod
+    def load(cls, fname):
+        with open(fname, 'rb') as f:
+            res = pickle.load(f)
+        if not isinstance(res, cls):
+            del res
+            return False
+        return res
+
+    def save(self, fname):
+        if not len(fname.split('.')) > 1:
+            fname += '.pickle'
+        with open(fname, 'wb') as f:
+            pickle.dump(self, f, pickle.HIGHEST_PROTOCOL)
+
 
 class Pipeline():
     def __init__(self, drawn_arms, phi=0.0, ba=1.0, distances=None,
                  bar_length=10, image_size=512, parallel=False):
         self.drawn_arms = np.array(equalize_arm_length(np.array(drawn_arms)))
-        self.image_size = image_size
-        self.phi = phi
-        self.ba = ba
+        self.image_size = float(image_size)
+        self.phi = float(phi)
+        self.ba = float(ba)
         self.bar_length = bar_length
         if distances is None:
             cdm = (metric.calculate_distance_matrix_parallel if parallel
@@ -116,7 +146,7 @@ class Pipeline():
             for i in range(max(self.db.labels_) + 1)
         ]
 
-    def merge_arms(self, arms, threshold=100, **kwargs):
+    def merge_arms(self, arms, threshold=100):
         arms = np.array(arms)
         logsps = [arm.reprojected_log_spiral for arm in arms]
         pairs = []
@@ -143,7 +173,57 @@ class Pipeline():
         groups += [[i] for i in range(len(arms)) if not i in pairs]
         merged_arms = []
         for group in groups:
-            grouped_drawn_arms = np.concatenate([a.arms for a in arms[group]])
-            new_arm = Arm(self, grouped_drawn_arms, **kwargs)
-            merged_arms.append(new_arm)
+            if len(group) == 1:
+                merged_arms.append(arms[group][0])
+            else:
+                grouped_drawn_arms = np.concatenate([a.arms for a in arms[group]])
+                new_arm = Arm(
+                    self,
+                    grouped_drawn_arms,
+                    clean_points=any(a.did_clean for a in arms[group])
+                )
+                merged_arms.append(new_arm)
         return np.array(merged_arms)
+
+    def get_pitch_angle(self, arms=None):
+        if arms is None:
+            arms = self.get_arms()
+        if len(arms) == 0:
+            return np.nan, np.nan
+        pa = np.zeros(len(arms))
+        sigma_pa = np.zeros(pa.shape)
+        length = np.zeros(pa.shape)
+        for i, arm in enumerate(arms):
+            pa[i] = arm.pa
+            length[i] = arm.length
+            sigma_pa[i] = arm.sigma_pa
+        combined_pa = (pa * length).sum() / length.sum()
+        combined_sigma_pa = np.sqrt((length**2 * sigma_pa**2).sum()) / length.sum()
+        return combined_pa, combined_sigma_pa
+
+    @classmethod
+    def load(cls, fname, parallel=True):
+        with open(fname) as f:
+            obj = json.load(f)
+        return cls(
+            list(map(np.array, obj.get('drawn_arms', []))),
+            phi=obj.get('phi', 0.0),
+            ba=obj.get('ba', 1.0),
+            distances=np.array(obj.get('distances', None)),
+            bar_length=obj.get('bar_length', 10),
+            image_size=obj.get('image_size', 512),
+            parallel=parallel,
+        )
+
+    def save(self, fname):
+        if not len(fname.split('.')) > 1:
+            fname += '.json'
+        with open(fname, 'w') as f:
+            json.dump({
+                'drawn_arms': list(map(np.ndarray.tolist, self.drawn_arms)),
+                'phi': self.phi,
+                'ba': self.ba,
+                'distances': self.distances.tolist(),
+                'bar_length': self.bar_length,
+                'image_size': self.image_size,
+            }, f)
