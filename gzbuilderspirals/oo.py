@@ -12,7 +12,7 @@ class Arm():
     def __init__(self, parent_pipeline, arms, clean_points=True):
         self.__parent_pipeline = parent_pipeline
         self.did_clean = clean_points
-        self.arms = arms
+        self.arms = np.array(equalize_arm_length(arms))
         self.phi = parent_pipeline.phi
         self.ba = parent_pipeline.ba
         self.image_size = parent_pipeline.image_size
@@ -134,7 +134,7 @@ class Pipeline():
                  parallel=False):
         self.drawn_arms = np.array(
             split_arms_at_centre(
-                equalize_arm_length(np.array(drawn_arms)),
+                np.array(drawn_arms),
                 image_size=image_size,
                 threshold=centre_size,
             )
@@ -169,7 +169,7 @@ class Pipeline():
             for i in range(max(self.db.labels_) + 1)
         ]
 
-    def merge_arms(self, arms, threshold=100):
+    def merge_arms(self, arms, threshold=400):
         arms = np.array(arms)
         logsps = [arm.reprojected_log_spiral for arm in arms]
         pairs = []
@@ -199,7 +199,7 @@ class Pipeline():
             if len(group) == 1:
                 merged_arms.append(arms[group][0])
             else:
-                grouped_drawn_arms = np.concatenate([a.arms for a in arms[group]])
+                grouped_drawn_arms = sum((list(a.arms) for a in arms[group]), [])
                 new_arm = Arm(
                     self,
                     grouped_drawn_arms,
