@@ -1,10 +1,11 @@
 import json
 import pickle
 import numpy as np
+from sklearn.metrics import median_absolute_error
 from sklearn.model_selection import GroupKFold
 from . import metric, clustering, cleaning, deprojecting, fitting, pipeline
 from . import xy_from_r_theta, r_theta_from_xy
-from . import get_sample_weight, equalize_arm_length
+from . import get_sample_weight, equalize_arm_length, split_arms_at_centre
 
 
 class Arm():
@@ -65,7 +66,8 @@ class Arm():
             self.sigma[0, 0]
         )
 
-    def fit_polynomials(self, min_degree=1, max_degree=5, n_splits=5):
+    def fit_polynomials(self, min_degree=1, max_degree=5, n_splits=5,
+                        score=median_absolute_error):
         gkf = GroupKFold(n_splits=min(n_splits, len(np.unique(self.groups))))
         models = {}
         scores = {}
@@ -76,12 +78,26 @@ class Arm():
                 self.t.reshape(-1, 1), self.R,
                 cv=gkf,
                 groups=self.groups,
-                weights=self.point_weights
+                weights=self.point_weights,
+                score=score,
             )
             poly_model.fit(self.t.reshape(-1, 1), self.R)
             poly_r = poly_model.predict(self.t_predict.reshape(-1, 1))
-            models['poly_spiral_{}'.format(degree)] = np.vstack(self.t_predict, poly_r)
+            models['poly_spiral_{}'.format(degree)] = np.stack((self.t_predict, poly_r), axis=1)
             scores['poly_spiral_{}'.format(degree)] = s
+        s = fitting.weighted_group_cross_val(
+            self.logsp_model,
+            self.t.reshape(-1, 1), self.R,
+            cv=gkf,
+            groups=self.groups,
+            weights=self.point_weights,
+            score=score,
+        )
+        models['log_spiral'] = np.stack((
+            self.t_predict,
+            self.logsp_model.predict(self.t_predict.reshape(-1, 1))
+        ), axis=1)
+        scores['log_spiral'] = s
         return models, scores
 
     def __add__ (self, other):
@@ -114,8 +130,15 @@ class Arm():
 
 class Pipeline():
     def __init__(self, drawn_arms, phi=0.0, ba=1.0, distances=None,
-                 bar_length=10, image_size=512, parallel=False):
-        self.drawn_arms = np.array(equalize_arm_length(np.array(drawn_arms)))
+                 bar_length=10, centre_size=10, image_size=512,
+                 parallel=False):
+        self.drawn_arms = np.array(
+            split_arms_at_centre(
+                equalize_arm_length(np.array(drawn_arms)),
+                image_size=image_size,
+                threshold=centre_size,
+            )
+        )
         self.image_size = float(image_size)
         self.phi = float(phi)
         self.ba = float(ba)

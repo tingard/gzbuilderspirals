@@ -52,21 +52,22 @@ def unwrap_and_sort(r, theta):
 
 
 def unwrap(theta, r, groups):
-    out = theta[:]
+    out = theta.copy()
     dt = (np.arange(3) - 1) * 2 * np.pi
     t = np.array([])
+    r_scaling = 2 * np.pi / np.max(r)
     for i, g in enumerate(np.unique(groups)):
-        t_ = np.unwrap(theta[groups == g])
+        t_ = np.unwrap(out[groups == g])
         if i == 0:
             out[groups == g] = t_
             continue
-        coords = np.stack((t_, r[groups == g]), axis=0)
+        coords = np.stack((t_, r[groups == g] * r_scaling), axis=0)
         poss = ((coords.T + (delta, 0)).T for delta in dt)
 
         extremes = [np.argmin(out[groups < g]), np.argmax(out[groups < g])]
         other = np.stack((
             out[groups < g][extremes],
-            r[groups < g][extremes]
+            r[groups < g][extremes] * r_scaling
         ), axis=0)
 
         d = [metric.min_arc_distance_numpy([c.T, other.T]) for c in poss]
@@ -95,7 +96,8 @@ def get_xy_errors(fit_result):
     return np.stack((x_lower, y_lower)), np.stack((x_upper, y_upper))
 
 
-def weighted_group_cross_val(pipeline, X, y, cv, groups, weights):
+def weighted_group_cross_val(pipeline, X, y, cv, groups, weights,
+                             score=median_absolute_error):
     scores = np.zeros(cv.get_n_splits(X, y, groups=groups))
     for i, (train, test) in enumerate(cv.split(X, y, groups=groups)):
         X_train, y_train = X[train], y[train]
@@ -103,14 +105,10 @@ def weighted_group_cross_val(pipeline, X, y, cv, groups, weights):
         group_weights = weights[train] / weights[train].mean()
         pipeline.fit(X_train, y_train,
                      bayesianridge__sample_weight=group_weights)
-        # scores[i] = pipeline.score(
-        #     X_test,
-        #     y_test,
-        #     sample_weight=weights[test]
-        # )
         y_pred = pipeline.predict(
             X_test,
         )
+        # use the negative median absolute error (so > is better)
         scores[i] = -median_absolute_error(y_pred, y_test)
     return scores
 

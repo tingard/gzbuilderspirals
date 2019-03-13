@@ -50,30 +50,31 @@ def get_drawn_arms(id, classifications, clean=True):
         for arm in classification
         if not clean or LineString(arm).is_simple
     ])
-    # annotations_for_subject = [
-    #     json.loads(i) for i in
-    #     classifications['annotations'][classifications['subject_ids'] == id]
-    # ]
-    # try:
-    #     annotations_with_spiral = [
-    #         c[3]['value'][0]['value']
-    #         for c in annotations_for_subject
-    #         if len(c) > 3 and len(c[3]['value'][0]['value'])
-    #     ]
-    # except IndexError as e:
-    #     print('{} raised {}'.format(id, e))
-    #     raise(e)
-    # spirals = [[a['points'] for a in c] for c in annotations_with_spiral]
-    # spirals_with_length_cut = [
-    #     [[[p['x'], p['y']] for p in a] for a in c]
-    #     for c in spirals if all([len(a) > 5 for a in c])
-    # ]
-    # drawn_arms = np.array([
-    #     np.array(arm) for classification in spirals_with_length_cut
-    #     for arm in classification
-    #     if not clean or LineString(arm).is_simple
-    # ])
     return drawn_arms
+
+
+def split_arms_at_centre(arms, image_size=512, threshold=10):
+    out = []
+    for arm in arms:
+        distances_from_centre = np.sqrt(np.add.reduce(
+            (arm - [image_size / 2, image_size / 2])**2,
+            axis=1
+        ))
+        mask = distances_from_centre < threshold
+        if not np.any(mask):
+            out.append(arm)
+            continue
+        res = np.where(mask)[0].tolist()
+        split_arm = [
+            l for l in
+            (
+                j if i == 0 else j[1:]
+                for i, j in enumerate(np.split(arm, np.where(mask)[0]))
+            )
+            if len(l) > 0
+        ]
+        out.extend(split_arm)
+    return out
 
 
 def equalize_arm_length(arms, method=np.max):
