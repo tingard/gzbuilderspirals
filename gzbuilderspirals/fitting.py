@@ -97,7 +97,7 @@ def get_xy_errors(fit_result):
 
 
 def weighted_group_cross_val(pipeline, X, y, cv, groups, weights,
-                             score=median_absolute_error):
+                             score=median_absolute_error, lower_better=True):
     scores = np.zeros(cv.get_n_splits(X, y, groups=groups))
     for i, (train, test) in enumerate(cv.split(X, y, groups=groups)):
         X_train, y_train = X[train], y[train]
@@ -109,7 +109,10 @@ def weighted_group_cross_val(pipeline, X, y, cv, groups, weights,
             X_test,
         )
         # use the negative median absolute error (so > is better)
-        scores[i] = -median_absolute_error(y_pred, y_test)
+        if lower_better:
+            scores[i] = -score(y_pred, y_test)
+        else:
+            scores[i] = score(y_pred, y_test)
     return scores
 
 

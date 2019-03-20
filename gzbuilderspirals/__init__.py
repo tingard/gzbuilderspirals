@@ -71,7 +71,7 @@ def split_arms_at_centre(arms, image_size=512, threshold=10):
                 j if i == 0 else j[1:]
                 for i, j in enumerate(np.split(arm, np.where(mask)[0]))
             )
-            if len(l) > 0
+            if len(l) > 1
         ]
         out.extend(split_arm)
     return out
@@ -107,3 +107,11 @@ def get_sample_weight(R, groups, bar_length=0):
     w[R < bar_length] = 0
     w /= np.average(w)
     return w
+
+
+def get_pitch_angle(b, sigma_b):
+    pa2 = np.arctan(b)
+    pa = 90 - np.rad2deg(np.arctan(np.abs(1/b)))
+    print(pa, pa2)
+    sigma_pa = np.rad2deg(np.sqrt(sigma_b**2 / (b**2 + 1)**2))
+    return (pa, sigma_pa)

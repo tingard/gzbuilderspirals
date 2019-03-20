@@ -1,11 +1,11 @@
 from sklearn.cluster import DBSCAN
 
 
-def cluster_arms(distances):
+def cluster_arms(distances, eps=400, min_samples=4):
     return DBSCAN(
-        eps=400,
-        min_samples=4,
+        eps=eps,
+        min_samples=min_samples,
         metric='precomputed',
         n_jobs=-1,
-        algorithm='brute'
+        algorithm='brute',
     ).fit(distances)

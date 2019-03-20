@@ -1,10 +1,11 @@
 import json
 import pickle
 import numpy as np
+import pandas as pd
 from sklearn.metrics import median_absolute_error
 from sklearn.model_selection import GroupKFold
-from . import metric, clustering, cleaning, deprojecting, fitting, pipeline
-from . import xy_from_r_theta, r_theta_from_xy
+from . import metric, clustering, cleaning, deprojecting, fitting
+from . import xy_from_r_theta, r_theta_from_xy, get_pitch_angle
 from . import get_sample_weight, equalize_arm_length, split_arms_at_centre
 
 
@@ -16,6 +17,7 @@ class Arm():
         self.phi = parent_pipeline.phi
         self.ba = parent_pipeline.ba
         self.image_size = parent_pipeline.image_size
+        self.FLAGGED_AS_BAD = False
 
         bar_length = parent_pipeline.bar_length / self.image_size
 
@@ -41,6 +43,8 @@ class Arm():
         self.point_weights = get_sample_weight(self.R, self.groups, bar_length)
         self.logsp_model.fit(self.t.reshape(-1, 1), self.R,
                              bayesianridge__sample_weight=self.point_weights)
+        if self.logsp_model.score(self.t.reshape(-1, 1), self.R,) < 0.2:
+            self.FLAGGED_AS_BAD = True
 
         self.t_predict = np.linspace(min(self.t), max(self.t), 500)
         R_predict = self.logsp_model.predict(self.t_predict.reshape(-1, 1))
@@ -49,7 +53,7 @@ class Arm():
         R_predict = R_predict[R_predict > bar_length]
 
         x, y = xy_from_r_theta(R_predict, t_predict)
-        self.length = np.sum(np.sqrt((x[1:] - x[:-1])**2 + (y[1:] - y[:-1])**2))
+        self.length = np.sum(np.sqrt((x[1:] - x[:-1])**2 + (y[1:] - y[:-1])**2)) * self.image_size
 
         self.log_spiral = (np.stack((x, y), axis=1) + 0.5) * self.image_size
 
@@ -61,13 +65,16 @@ class Arm():
 
         self.coef = self.logsp_model.named_steps['bayesianridge'].regressor_.coef_
         self.sigma = self.logsp_model.named_steps['bayesianridge'].regressor_.sigma_
-        self.pa, self.sigma_pa = pipeline.get_pitch_angle(
+        self.pa, self.sigma_pa = get_pitch_angle(
             self.coef[0],
             self.sigma[0, 0]
         )
 
+    def get_parent(self):
+        return self.__parent_pipeline
+
     def fit_polynomials(self, min_degree=1, max_degree=5, n_splits=5,
-                        score=median_absolute_error):
+                        score=median_absolute_error, lower_better=True):
         gkf = GroupKFold(n_splits=min(n_splits, len(np.unique(self.groups))))
         models = {}
         scores = {}
@@ -80,6 +87,7 @@ class Arm():
                 groups=self.groups,
                 weights=self.point_weights,
                 score=score,
+                lower_better=lower_better
             )
             poly_model.fit(self.t.reshape(-1, 1), self.R)
             poly_r = poly_model.predict(self.t_predict.reshape(-1, 1))
@@ -92,6 +100,7 @@ class Arm():
             groups=self.groups,
             weights=self.point_weights,
             score=score,
+            lower_better=lower_better
         )
         models['log_spiral'] = np.stack((
             self.t_predict,
@@ -127,11 +136,33 @@ class Arm():
         with open(fname, 'wb') as f:
             pickle.dump(self, f, pickle.HIGHEST_PROTOCOL)
 
+    def get_info(self):
+        return pd.Series({
+            'n_arms': len(self.arms),
+            'n_points': len(self.coords),
+            'length': self.length,
+            'log spiral pa': self.pa,
+            'log spiral pa err': self.sigma_pa,
+        })
+
+    def _repr_svg_(self):
+        return (
+            '<svg viewBox="0 0 {} {}" xmlns="http://www.w3.org/2000/svg" style="width:200px; height:200px">'
+            '<polyline points="{}" fill="none" stroke="black" /></svg>'
+        ).format(
+            self.image_size / 10,
+            self.image_size / 10,
+            ' '.join(
+                ','.join(map(str, point.round(2) / 10))
+                for point in self.reprojected_log_spiral
+            )
+        )
+
 
 class Pipeline():
     def __init__(self, drawn_arms, phi=0.0, ba=1.0, distances=None,
-                 bar_length=10, centre_size=10, image_size=512,
-                 parallel=False):
+                 bar_length=10, centre_size=20, image_size=512,
+                 clustering_kwargs={}, parallel=False):
         self.drawn_arms = np.array(
             split_arms_at_centre(
                 np.array(drawn_arms),
@@ -152,24 +183,32 @@ class Pipeline():
                 self.distances = cdm(self.drawn_arms)
         else:
             self.distances = distances
-        self.db = clustering.cluster_arms(self.distances)
+        self.db = clustering.cluster_arms(
+            self.distances,
+            **clustering_kwargs,
+        )
 
     def get_arm(self, arm_label, clean_points=True):
         arms_in_cluster = self.drawn_arms[self.db.labels_ == arm_label]
         return Arm(self, arms_in_cluster, clean_points=clean_points)
 
+    def filter_arms(self, arms):
+        return [arm for arm in arms if not arm.FLAGGED_AS_BAD]
+
     def get_arms(self, merge=True, *args, **kwargs):
         if merge:
-            return self.merge_arms([
-                self.get_arm(i, *args, **kwargs)
-                for i in range(max(self.db.labels_) + 1)
-            ])
-        return [
+            return self.filter_arms(
+                self.merge_arms([
+                    self.get_arm(i, *args, **kwargs)
+                    for i in range(max(self.db.labels_) + 1)
+                ])
+            )
+        return self.filter_arms([
             self.get_arm(i, *args, **kwargs)
             for i in range(max(self.db.labels_) + 1)
-        ]
+        ])
 
-    def merge_arms(self, arms, threshold=400):
+    def merge_arms(self, arms, threshold=500):
         arms = np.array(arms)
         logsps = [arm.reprojected_log_spiral for arm in arms]
         pairs = []
